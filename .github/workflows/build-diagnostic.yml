@@ -51,6 +51,9 @@ jobs:
       - name: Build idevice pairing library
         run: ./tools/development/build-idevice.sh
 
+      - name: Prepare Gecko build config
+        run: touch engine/firefox/.mozconfig
+
       - name: Build Gecko
         run: ./tools/development/build-gecko.sh
 
