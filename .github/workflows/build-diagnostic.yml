@@ -69,7 +69,7 @@ jobs:
       - name: Install Gecko build tools
         run: |
           cargo install cbindgen --locked
-          brew install wasi-runtimes
+          brew install llvm wasi-libc wasi-runtimes
 
       - name: Prepare Gecko build config
         run: touch engine/firefox/.mozconfig
@@ -77,14 +77,25 @@ jobs:
       - name: Build Gecko
         run: |
           LLVM_PREFIX="$(brew --prefix llvm)"
-          WASI_PREFIX="$(brew --prefix wasi-runtimes)"
+          WASI_LIBC_PREFIX="$(brew --prefix wasi-libc)"
+          WASI_SYSROOT="${WASI_LIBC_PREFIX}/share/wasi-sysroot"
           echo "Using LLVM: ${LLVM_PREFIX}"
-          echo "Using WASI runtimes: ${WASI_PREFIX}"
+          echo "Using WASI sysroot: ${WASI_SYSROOT}"
+          test -f "${WASI_SYSROOT}/include/string.h"
           export PATH="${LLVM_PREFIX}/bin:${PATH}"
-          export WASM_CC="${LLVM_PREFIX}/bin/clang"
-          export WASM_CXX="${LLVM_PREFIX}/bin/clang++"
-          export WASM_CFLAGS="--sysroot=${WASI_PREFIX}/share/wasi-sysroot"
-          export WASM_CXXFLAGS="--sysroot=${WASI_PREFIX}/share/wasi-sysroot"
+          export LLVM_PREFIX WASI_SYSROOT
+
+          cat > "${RUNNER_TEMP}/wasi-clang" <<'EOF'
+          #!/bin/bash
+          exec "${LLVM_PREFIX}/bin/clang" --sysroot="${WASI_SYSROOT}" "$@"
+          EOF
+          cat > "${RUNNER_TEMP}/wasi-clang++" <<'EOF'
+          #!/bin/bash
+          exec "${LLVM_PREFIX}/bin/clang++" --sysroot="${WASI_SYSROOT}" "$@"
+          EOF
+          chmod +x "${RUNNER_TEMP}/wasi-clang" "${RUNNER_TEMP}/wasi-clang++"
+          export WASM_CC="${RUNNER_TEMP}/wasi-clang"
+          export WASM_CXX="${RUNNER_TEMP}/wasi-clang++"
           ./tools/development/build-gecko.sh
 
       - name: Archive Reynard without Apple provisioning
