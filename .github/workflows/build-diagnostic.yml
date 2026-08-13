@@ -66,6 +66,9 @@ jobs:
       - name: Build idevice pairing library
         run: ./tools/development/build-idevice.sh
 
+      - name: Install Gecko build tools
+        run: cargo install cbindgen --locked
+
       - name: Prepare Gecko build config
         run: touch engine/firefox/.mozconfig
 
