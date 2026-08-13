@@ -5,6 +5,7 @@
 //  Created by Minh Ton on 5/3/26.
 //
 
+import Foundation
 import UIKit
 
 protocol AddressBarDelegate: AnyObject {
@@ -243,19 +244,39 @@ final class AddressBar: UIView {
         NotificationCenter.default.removeObserver(self)
     }
     
+    private func logIME(_ event: String) {
+        let thread = Thread.isMainThread ? "main" : "background"
+        NSLog("[REYNARD-IME] %@ | thread=%@", event, thread)
+        if !Thread.isMainThread {
+            NSLog(
+                "[REYNARD-IME] off-main call stack:\n%@",
+                Thread.callStackSymbols.prefix(12).joined(separator: "\n")
+            )
+        }
+    }
+
     override var canBecomeFirstResponder: Bool {
         return textField.canBecomeFirstResponder
     }
     
     override func becomeFirstResponder() -> Bool {
-        return textField.becomeFirstResponder()
+        logIME("before AddressBar.becomeFirstResponder")
+        let result = textField.becomeFirstResponder()
+        logIME("after AddressBar.becomeFirstResponder result=\(result)")
+        return result
     }
     
     override func resignFirstResponder() -> Bool {
-        return textField.resignFirstResponder()
+        logIME("before AddressBar.resignFirstResponder")
+        let result = textField.resignFirstResponder()
+        logIME("after AddressBar.resignFirstResponder result=\(result)")
+        return result
     }
     
     override func layoutSubviews() {
+        if !Thread.isMainThread {
+            logIME("AddressBar.layoutSubviews on background thread")
+        }
         super.layoutSubviews()
         addressBarBackground.layer.shadowPath = UIBezierPath(
             roundedRect: addressBarBackground.bounds,
