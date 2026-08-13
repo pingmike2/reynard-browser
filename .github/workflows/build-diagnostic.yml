@@ -84,6 +84,18 @@ jobs:
           print("Applied Xcode 26 ld64 detection compatibility patch")
           PY
 
+      - name: Cache Gecko build
+        id: gecko-cache
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: |
+            engine/firefox/obj-aarch64-apple-ios
+            ~/.mozbuild
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: gecko-${{ runner.os }}-${{ hashFiles('engine/release.txt', 'patches/**') }}
+
       - name: Build idevice pairing library
         run: ./tools/development/build-idevice.sh
 
