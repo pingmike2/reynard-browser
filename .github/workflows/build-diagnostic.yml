@@ -1,0 +1,104 @@
+name: Build Diagnostic IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Xcode configuration
+        required: true
+        default: Release
+        type: choice
+        options:
+          - Debug
+          - Release
+
+permissions:
+  contents: read
+
+jobs:
+  build-diagnostic:
+    name: Build Reynard diagnostic IPA
+    runs-on: macos-14
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Show Apple toolchain
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          swift --version
+          rustc --version
+          cargo --version
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Sync Gecko source
+        run: ./tools/development/update-gecko.sh
+
+      - name: Apply Gecko patches
+        run: ./tools/development/apply-patches.sh
+
+      - name: Build idevice pairing library
+        run: ./tools/development/build-idevice.sh
+
+      - name: Build Gecko
+        run: ./tools/development/build-gecko.sh
+
+      - name: Archive Reynard without Apple provisioning
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.configuration }}
+        run: |
+          set -o pipefail
+          rm -rf dist
+          mkdir -p dist
+          cp browser/Configuration/Reynard.xcconfig dist/Reynard.xcconfig
+          BUILD_SHA="${GITHUB_SHA::7}"
+          sed -i '' "s/CURRENT_BUILD = .*/CURRENT_BUILD = ${BUILD_SHA}/" dist/Reynard.xcconfig
+
+          xcodebuild archive \
+            -scheme Reynard \
+            -project browser/Reynard.xcodeproj \
+            -sdk iphoneos \
+            -arch arm64 \
+            -configuration "${BUILD_CONFIGURATION}" \
+            -archivePath dist/Reynard.xcarchive \
+            -xcconfig dist/Reynard.xcconfig \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee dist/xcodebuild.log
+
+      - name: Package IPA and TrollStore TIPA
+        run: ./tools/release/create-ipa.sh
+
+      - name: Upload diagnostic artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reynard-diagnostic-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/Reynard.ipa
+            dist/Reynard-TrollStore.tipa
+            dist/Reynard-Jailbroken.ipa
+            dist/xcodebuild.log
+
+      - name: Upload build log after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reynard-diagnostic-build-log-${{ github.sha }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: dist/xcodebuild.log
