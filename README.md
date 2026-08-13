@@ -151,7 +151,7 @@ To run Reynard, open `Reynard.xcodeproj` in Xcode and build/run it from there.
 
 ### Building without macOS/Xcode
 
-The fork includes a **Build Diagnostic IPA** GitHub Actions workflow. Every push to `main` automatically uses a macOS runner to sync Gecko, apply patches, build the Gecko engine and Rust dependencies, archive Reynard, and upload `Reynard-TrollStore.tipa`, `Reynard-Jailbroken.ipa`, and the build log as workflow artifacts. A manual `workflow_dispatch` trigger is also available for choosing `Debug` or `Release`.
+The fork includes a **Build Diagnostic IPA** GitHub Actions workflow. Every push to `main` automatically uses a macOS 26 runner to sync Gecko, apply patches, build the Gecko engine and Rust dependencies, archive Reynard, and upload `Reynard-TrollStore.tipa`, `Reynard-Jailbroken.ipa`, and the build log as workflow artifacts. A manual `workflow_dispatch` trigger is also available for choosing `Debug` or `Release`.
 
 1. Open the fork on GitHub and go to **Actions**.
 2. For automatic builds, push a commit to `main` and wait for **Build Diagnostic IPA**.
