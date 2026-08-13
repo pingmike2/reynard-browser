@@ -18,7 +18,7 @@ on:
           - Release
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-diagnostic:
@@ -166,6 +166,23 @@ jobs:
             dist/Reynard-TrollStore.tipa
             dist/Reynard-Jailbroken.ipa
             dist/xcodebuild.log
+
+      - name: Publish diagnostic Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="reynard-diagnostic"
+          SHA8="${GITHUB_SHA::8}"
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Reynard Diagnostic Build ($SHA8)" \
+            --notes "自动构建 commit $SHA8。Reynard-TrollStore.tipa = TrollStore 安装；Reynard-Jailbroken.ipa = 越狱安装；Reynard.ipa = 通用。" \
+            dist/Reynard.ipa \
+            dist/Reynard-TrollStore.tipa \
+            dist/Reynard-Jailbroken.ipa
 
       - name: Upload build log after failure
         if: failure()
