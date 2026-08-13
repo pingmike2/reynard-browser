@@ -59,7 +59,21 @@ jobs:
           new = 'if retcode == 1 and (target.kernel == "Darwin" or "Logging ld64 options" in stderr):'
           if old not in text:
               raise SystemExit("Expected Gecko ld64 detection code was not found")
-          path.write_text(text.replace(old, new, 1))
+          text = text.replace(old, new, 1)
+
+          # Xcode 26 Apple clang rejects Gecko's automatic Darwin lld choice
+          # for host helper tools; force the normal ld64 fallback instead.
+          old_lld_choice = '''                or (
+                    target.kernel == "Darwin"
+                    and (
+                        (developer_options and c_compiler.version >= "13.0")
+                        or c_compiler.version >= "15.0"
+                    )
+                )'''
+          if text.count(old_lld_choice) != 1:
+              raise SystemExit("Expected Gecko Darwin lld selection block was not found exactly once")
+          text = text.replace(old_lld_choice, "                or False", 1)
+          path.write_text(text)
           print("Applied Xcode 26 ld64 detection compatibility patch")
           PY
 
