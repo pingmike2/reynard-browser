@@ -151,15 +151,15 @@ To run Reynard, open `Reynard.xcodeproj` in Xcode and build/run it from there.
 
 ### Building without macOS/Xcode
 
-The fork includes a manual GitHub Actions workflow named **Build Diagnostic IPA**. It uses a macOS runner to sync Gecko, apply patches, build the Gecko engine and Rust dependencies, archive Reynard, and upload `Reynard-TrollStore.tipa`, `Reynard-Jailbroken.ipa`, and the build log as workflow artifacts.
+The fork includes a **Build Diagnostic IPA** GitHub Actions workflow. Every push to `main` automatically uses a macOS runner to sync Gecko, apply patches, build the Gecko engine and Rust dependencies, archive Reynard, and upload `Reynard-TrollStore.tipa`, `Reynard-Jailbroken.ipa`, and the build log as workflow artifacts. A manual `workflow_dispatch` trigger is also available for choosing `Debug` or `Release`.
 
 1. Open the fork on GitHub and go to **Actions**.
-2. Select **Build Diagnostic IPA**.
-3. Click **Run workflow** and choose `Release` (or `Debug`).
+2. For automatic builds, push a commit to `main` and wait for **Build Diagnostic IPA**.
+3. For a manual build, select **Build Diagnostic IPA** → **Run workflow** → choose `Release` or `Debug`.
 4. After the run succeeds, download the artifact named `reynard-diagnostic-<commit>`.
 5. Install `Reynard-TrollStore.tipa` with TrollStore on iOS 14–16.6.1/17.0, or use `Reynard-Jailbroken.ipa` on a jailbroken device.
 
-The workflow is manual-only because compiling Gecko is expensive; normal pushes do not start this build.
+The build is intentionally placed on a macOS runner because Gecko and the iOS Xcode project cannot be built on Linux.
 
 ## Notes
 

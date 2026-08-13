@@ -1,6 +1,9 @@
 name: Build Diagnostic IPA
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       configuration:
@@ -53,7 +56,7 @@ jobs:
 
       - name: Archive Reynard without Apple provisioning
         env:
-          BUILD_CONFIGURATION: ${{ inputs.configuration }}
+          BUILD_CONFIGURATION: ${{ inputs.configuration || 'Release' }}
         run: |
           set -o pipefail
           rm -rf dist
