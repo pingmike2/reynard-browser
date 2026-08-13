@@ -67,13 +67,25 @@ jobs:
         run: ./tools/development/build-idevice.sh
 
       - name: Install Gecko build tools
-        run: cargo install cbindgen --locked
+        run: |
+          cargo install cbindgen --locked
+          brew install wasi-runtimes
 
       - name: Prepare Gecko build config
         run: touch engine/firefox/.mozconfig
 
       - name: Build Gecko
-        run: ./tools/development/build-gecko.sh
+        run: |
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          WASI_PREFIX="$(brew --prefix wasi-runtimes)"
+          echo "Using LLVM: ${LLVM_PREFIX}"
+          echo "Using WASI runtimes: ${WASI_PREFIX}"
+          export PATH="${LLVM_PREFIX}/bin:${PATH}"
+          export WASM_CC="${LLVM_PREFIX}/bin/clang"
+          export WASM_CXX="${LLVM_PREFIX}/bin/clang++"
+          export WASM_CFLAGS="--sysroot=${WASI_PREFIX}/share/wasi-sysroot"
+          export WASM_CXXFLAGS="--sysroot=${WASI_PREFIX}/share/wasi-sysroot"
+          ./tools/development/build-gecko.sh
 
       - name: Archive Reynard without Apple provisioning
         env:
