@@ -21,6 +21,7 @@ mv "$FIREFOX_DIR/.mozconfig" "$FIREFOX_DIR/.mozconfig.bak"
 {
 	echo "ac_add_options --enable-application=mobile/ios"
 	echo "ac_add_options --target=$TARGET"
+	echo "ac_add_options --enable-linker=ld64"
 	echo "ac_add_options --enable-ios-target=13.0"
 	echo "ac_add_options --enable-webrtc"
 	echo "ac_add_options --enable-optimize"
