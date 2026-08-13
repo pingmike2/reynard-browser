@@ -56,7 +56,7 @@ jobs:
           path = Path("engine/firefox/build/moz.configure/toolchain.configure")
           text = path.read_text()
           old = 'if retcode == 1 and "Logging ld64 options" in stderr:'
-          new = 'if retcode == 1 and (linker == "ld64" or "Logging ld64 options" in stderr):'
+          new = 'if retcode == 1 and (target.kernel == "Darwin" or "Logging ld64 options" in stderr):'
           if old not in text:
               raise SystemExit("Expected Gecko ld64 detection code was not found")
           path.write_text(text.replace(old, new, 1))
