@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'browser/**'
   workflow_dispatch:
     inputs:
       configuration:
