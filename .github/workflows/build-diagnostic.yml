@@ -69,33 +69,27 @@ jobs:
       - name: Install Gecko build tools
         run: |
           cargo install cbindgen --locked
-          brew install llvm wasi-libc wasi-runtimes
 
       - name: Prepare Gecko build config
         run: touch engine/firefox/.mozconfig
 
       - name: Build Gecko
         run: |
-          LLVM_PREFIX="$(brew --prefix llvm)"
-          WASI_LIBC_PREFIX="$(brew --prefix wasi-libc)"
-          WASI_SYSROOT="${WASI_LIBC_PREFIX}/share/wasi-sysroot"
-          echo "Using LLVM: ${LLVM_PREFIX}"
-          echo "Using WASI sysroot: ${WASI_SYSROOT}"
-          test -f "${WASI_SYSROOT}/include/string.h"
-          export PATH="${LLVM_PREFIX}/bin:${PATH}"
-          export LLVM_PREFIX WASI_SYSROOT
-
-          cat > "${RUNNER_TEMP}/wasi-clang" <<'EOF'
-          #!/bin/bash
-          exec "${LLVM_PREFIX}/bin/clang" --sysroot="${WASI_SYSROOT}" "$@"
-          EOF
-          cat > "${RUNNER_TEMP}/wasi-clang++" <<'EOF'
-          #!/bin/bash
-          exec "${LLVM_PREFIX}/bin/clang++" --sysroot="${WASI_SYSROOT}" "$@"
-          EOF
-          chmod +x "${RUNNER_TEMP}/wasi-clang" "${RUNNER_TEMP}/wasi-clang++"
-          export WASM_CC="${RUNNER_TEMP}/wasi-clang"
-          export WASM_CXX="${RUNNER_TEMP}/wasi-clang++"
+          # The diagnostic build does not need Gecko's optional sandboxed WASM
+          # libraries; skipping them avoids a separate WASI SDK dependency.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("tools/development/build-gecko.sh")
+          text = path.read_text()
+          marker = 'echo "ac_add_options --enable-application=mobile/ios"\n'
+          addition = marker + '\techo "ac_add_options --without-wasm-sandboxed-libraries"\n'
+          if addition not in text:
+              if marker not in text:
+                  raise SystemExit("Gecko build configuration marker not found")
+              text = text.replace(marker, addition, 1)
+              path.write_text(text)
+          print("Disabled optional sandboxed WASM libraries for CI diagnostic build")
+          PY
           ./tools/development/build-gecko.sh
 
       - name: Archive Reynard without Apple provisioning
