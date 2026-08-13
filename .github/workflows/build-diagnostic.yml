@@ -63,16 +63,21 @@ jobs:
 
           # Xcode 26 Apple clang rejects Gecko's automatic Darwin lld choice
           # for host helper tools; force the normal ld64 fallback instead.
-          old_lld_choice = '''                or (
-                    target.kernel == "Darwin"
-                    and (
-                        (developer_options and c_compiler.version >= "13.0")
-                        or c_compiler.version >= "15.0"
-                    )
-                )'''
-          if text.count(old_lld_choice) != 1:
-              raise SystemExit("Expected Gecko Darwin lld selection block was not found exactly once")
-          text = text.replace(old_lld_choice, "                or False", 1)
+          import re
+          old_lld_choice = re.compile(
+              r'(?m)^\s*or \(\n'
+              r'\s*target\.kernel == "Darwin"\n'
+              r'\s*and \(\n'
+              r'\s*\(developer_options and c_compiler\.version >= "13\.0"\)\n'
+              r'\s*or c_compiler\.version >= "15\.0"\n'
+              r'\s*\)\n'
+              r'\s*\)'
+          )
+          text, replaced = old_lld_choice.subn("                or False", text, count=1)
+          if replaced != 1:
+              raise SystemExit(f"Expected Gecko Darwin lld selection block once, got {replaced}")
+          if 'result = try_linker("lld")' not in text:
+              raise SystemExit("Gecko linker selection marker disappeared unexpectedly")
           path.write_text(text)
           print("Applied Xcode 26 ld64 detection compatibility patch")
           PY
