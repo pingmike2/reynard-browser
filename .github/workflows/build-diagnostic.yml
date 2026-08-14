@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - 'browser/**'
+      - 'patches/**'
+      - 'tools/release/**'
   workflow_dispatch:
     inputs:
       configuration:
