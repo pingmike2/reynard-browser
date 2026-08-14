@@ -125,6 +125,9 @@ jobs:
               path.write_text(text)
           print("Disabled optional sandboxed WASM libraries for CI diagnostic build")
           PY
+          # 缓存的 obj 目录可能带 merge-day CLOBBER 标记，mach 会要求全量
+          # clobber 重建并直接退出；删掉标记以启用增量构建。
+          rm -f engine/firefox/obj-aarch64-apple-ios/CLOBBER
           ./tools/development/build-gecko.sh
 
       - name: Archive Reynard without Apple provisioning
