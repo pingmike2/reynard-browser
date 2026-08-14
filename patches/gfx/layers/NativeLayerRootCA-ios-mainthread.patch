@@ -1,0 +1,25 @@
+diff --git a/gfx/layers/NativeLayerCA.mm b/gfx/layers/NativeLayerCA.mm
+index 94efd9b6c370..9039890c772e 100644
+@@ -275,6 +275,22 @@
+ }
+ 
+ bool NativeLayerRootCA::CommitToScreen() {
++#if defined(MOZ_WIDGET_UIKIT)
++  // On iOS, committing the Gecko compositor's CALayer tree must happen on the
++  // main thread. When the compositor thread commits a layer tree attached to a
++  // UIKit view (e.g. a UIScrollView/UICollectionView backing GeckoView),
++  // CoreAnimation may run Auto Layout on the compositor thread, hitting the
++  // "_AssertAutoLayoutOnAllowedThreadsOnly" assertion and aborting. Defer
++  // non-main-thread commits to the main queue.
++  if (!NS_IsMainThread()) {
++    RefPtr<NativeLayerRootCA> self = this;
++    dispatch_async(dispatch_get_main_queue(), ^{
++      self->CommitToScreen();
++    });
++    return false;
++  }
++#endif
++
+   MutexAutoLock lock(mMutex);
+ 
+   if (!NS_IsMainThread() && mOffMainThreadCommitsSuspended) {
