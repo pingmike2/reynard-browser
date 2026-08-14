@@ -52,5 +52,15 @@ chmod 0755 "$PTRACE_JIT_OUT"
 ldid -S"$ROOT_DIR/browser/Reynard/JIT/Unsandboxed/ptrace_jit.entitlements" "$PTRACE_JIT_OUT"
 ldid -S"$ROOT_DIR/browser/Reynard/Entitlements/Reynard.private.entitlements" "Payload/Reynard.app/Reynard"
 ldid -S"$ROOT_DIR/browser/Helper/Entitlements/Reynard-Helper.private.entitlements" "Payload/Reynard.app/PlugIns/Reynard Helper.appex/Reynard Helper"
+
+# Gecko dylibs/XUL 与 GeckoView.framework 需要 ldid 伪签名（无证书构建时 AddGecko.sh 跳过了 codesign）
+if [ -d "Payload/Reynard.app/Frameworks/GeckoView.framework" ]; then
+	for fw_file in "Payload/Reynard.app/Frameworks/GeckoView.framework/Frameworks/"*.dylib "Payload/Reynard.app/Frameworks/GeckoView.framework/Frameworks/XUL" "Payload/Reynard.app/Frameworks/GeckoView.framework/Frameworks/"*.rs "Payload/Reynard.app/Frameworks/GeckoView.framework/XUL" "Payload/Reynard.app/Frameworks/GeckoView.framework/"*.so; do
+		if [ -f "$fw_file" ]; then
+			ldid -S "$fw_file" 2>/dev/null || true
+		fi
+	done
+	ldid -S "Payload/Reynard.app/Frameworks/GeckoView.framework" 2>/dev/null || true
+fi
 zip -r ../Reynard-TrollStore.tipa Payload -x "._*" -x ".DS_Store" -x "__MACOSX" # trollstore ipa
 cp ../Reynard-TrollStore.tipa ../Reynard-Jailbroken.ipa # for jailbroken users

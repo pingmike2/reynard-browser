@@ -20,7 +20,12 @@ cp -fL "${GECKO_DIST_BIN}/XUL" "${FRAMEWORKS_DIR}/XUL"
 
 for file in "${FRAMEWORKS_DIR}/XUL" "${FRAMEWORKS_DIR}/"*.dylib; do
 	if [ -f "${file}" ]; then
-		codesign --force --sign "${SIGN_IDENTITY}" --preserve-metadata=identifier,entitlements "${file}"
+		if [ "${CODE_SIGNING_ALLOWED:-YES}" = "NO" ]; then
+			# CI/无证书环境: 跳过硬编码 codesign, 由 create-ipa.sh 统一 ldid 伪签名
+			:
+		else
+			codesign --force --sign "${SIGN_IDENTITY}" --preserve-metadata=identifier,entitlements "${file}"
+		fi
 	fi
 done
 
@@ -33,4 +38,9 @@ cp -RfL "${DEFAULT_THEME_SRC}/" "${GECKOVIEW_FW_FRAMEWORKS}/default-theme/"
 echo "resource default-theme file:default-theme/" >> "${GECKOVIEW_FW_FRAMEWORKS}/chrome.manifest"
 
 # sign the GeckoView.framework
-codesign --force --sign "${SIGN_IDENTITY}" "${GECKOVIEW_FW}"
+if [ "${CODE_SIGNING_ALLOWED:-YES}" = "NO" ]; then
+	# CI/无证书环境: 跳过硬编码 codesign, 由 create-ipa.sh 统一 ldid 伪签名
+	:
+else
+	codesign --force --sign "${SIGN_IDENTITY}" "${GECKOVIEW_FW}"
+fi
