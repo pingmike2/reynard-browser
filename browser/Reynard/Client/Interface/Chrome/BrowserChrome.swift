@@ -565,7 +565,7 @@ final class BrowserChrome: UIView {
     }
     
     private func configureConstraints() {
-        bottomConstraint = bottomToolbar.bottomAnchor.constraint(equalTo: bottomAnchor)
+        bottomConstraint = bottomToolbar.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor)
         overlayWidthConstraint = overlayContentView.widthAnchor.constraint(equalToConstant: 0)
         overlayHeightConstraint = overlayContentView.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
