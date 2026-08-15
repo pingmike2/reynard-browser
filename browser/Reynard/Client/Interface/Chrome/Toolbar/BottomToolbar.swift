@@ -8,6 +8,9 @@
 import UIKit
 
 final class BottomToolbar: UIView {
+    /// 底部工具栏距 safe area 底部的额外上移量（输入框/按钮贴 home indicator 太近会点不到）
+    static let bottomInset: CGFloat = 10
+
     private enum UX {
         static let bottomToolbarStandardContentHeight: CGFloat = 94
         static let bottomToolbarFocusedContentHeight: CGFloat = 58
@@ -98,7 +101,7 @@ final class BottomToolbar: UIView {
     // MARK: - Layout
     
     func configureTopAnchor(to safeAreaBottomAnchor: NSLayoutYAxisAnchor) {
-        topConstraint = topAnchor.constraint(equalTo: safeAreaBottomAnchor, constant: -UX.bottomToolbarStandardContentHeight)
+        topConstraint = topAnchor.constraint(equalTo: safeAreaBottomAnchor, constant: -UX.bottomToolbarStandardContentHeight - Self.bottomInset)
         topConstraint.isActive = true
     }
     
@@ -143,7 +146,7 @@ final class BottomToolbar: UIView {
         }
         
         UIView.performWithoutAnimation {
-            topConstraint.constant = verticalOffset - contentHeight
+            topConstraint.constant = verticalOffset - contentHeight - Self.bottomInset
             contentHeightConstraint.constant = contentHeight
             isHidden = state == .hidden || state == .collapsed
             backgroundView.isHidden = state == .focused
@@ -168,7 +171,7 @@ final class BottomToolbar: UIView {
     
     func setVerticalOffset(_ offset: CGFloat) {
         verticalOffset = offset
-        topConstraint.constant = offset - contentHeightConstraint.constant
+        topConstraint.constant = offset - contentHeightConstraint.constant - Self.bottomInset
     }
     
     func setContentAlpha(_ alpha: CGFloat) {
