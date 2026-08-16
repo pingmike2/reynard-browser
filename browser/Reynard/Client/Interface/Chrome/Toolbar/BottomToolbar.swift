@@ -8,8 +8,10 @@
 import UIKit
 
 final class BottomToolbar: UIView {
-    /// 底部工具栏距 safe area 底部的额外上移量（输入框/按钮贴 home indicator 太近会点不到）
-    static let bottomInset: CGFloat = 10
+    /// 底部工具栏距 safe area 底部的额外上移量。
+    /// 之前 10pt 白边太多、显得碍事，调低到 5pt：既保留离 home indicator 的
+    /// 一点余量，又不至于悬空太难看。真机仍不适应可再调（0 = 完全贴底）。
+    static let bottomInset: CGFloat = 5
 
     private enum UX {
         static let bottomToolbarStandardContentHeight: CGFloat = 94
