@@ -64,3 +64,12 @@ if [ -d "Payload/Reynard.app/Frameworks/GeckoView.framework" ]; then
 fi
 zip -r ../Reynard-TrollStore.tipa Payload -x "._*" -x ".DS_Store" -x "__MACOSX" # trollstore ipa
 cp ../Reynard-TrollStore.tipa ../Reynard-Jailbroken.ipa # for jailbroken users
+
+# libhooker 系越狱拒绝加载 adhoc 签名的 libswift_Concurrency.dylib，从最后一个正式签名的 0.10.0 里取原版
+if [ -f "Payload/Reynard.app/Frameworks/libswift_Concurrency.dylib" ]; then
+	curl --location --output "Reynard-0.10.0.ipa" "https://github.com/minh-ton/reynard-browser/releases/download/0.10.0/Reynard.ipa"
+	unzip -p "Reynard-0.10.0.ipa" "Payload/Reynard.app/Frameworks/libswift_Concurrency.dylib" > "Payload/Reynard.app/Frameworks/libswift_Concurrency.dylib"
+	rm -f "Reynard-0.10.0.ipa"
+	zip -r ../Reynard-TrollStore.tipa Payload -x "._*" -x ".DS_Store" -x "__MACOSX"
+	cp ../Reynard-TrollStore.tipa ../Reynard-Jailbroken.ipa
+fi
