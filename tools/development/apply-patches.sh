@@ -52,7 +52,6 @@ if [[ -n "$(git -C "$SUBMODULE_PATH" status --porcelain)" ]]; then
 	exit 1
 fi
 
-setopt globstar null_glob
 if [[ -f "$PATCH_DIR/series" ]]; then
 	# patches/series 显式给出顺序，避免目录名排序造成的依赖错位
 	patch_files=()
@@ -61,6 +60,8 @@ if [[ -f "$PATCH_DIR/series" ]]; then
 		patch_files+=("$PATCH_DIR/$line")
 	done < "$PATCH_DIR/series"
 else
+	# 仅在按目录递归收集时需要 globstar；series 模式按文件路径逐个取，不依赖它
+	setopt globstar null_glob
 	patch_files=("$PATCH_DIR"/**/*.patch)
 fi
 
@@ -78,7 +79,7 @@ for patch_file in $patch_files; do
 		echo "Failed to apply $rel_path."
 		echo "Conflicted files:"
 		git -C "$SUBMODULE_PATH" diff --name-only --diff-filter=U || true
-		if [[ -n "${CI:-}" || "${GITHUB_ACTIONS:-}" == "true" || ! -t 0 ]]; then
+		if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" || ! -t 0 ]]; then
 			echo "Non-interactive environment: aborting instead of waiting for input."
 			exit 1
 		fi
