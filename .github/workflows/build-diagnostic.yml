@@ -157,6 +157,18 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             2>&1 | tee dist/xcodebuild.log
 
+          # 不签名构建会跳过 Xcode 的 bitcode 剥离，残留 bitcode 的
+          # libswift_Concurrency.dylib 会让 iOS 13.0 - 14.7 启动即崩溃。
+          # https://developer.apple.com/documentation/Xcode-Release-Notes/xcode-13_3_1-release-notes
+          SWIFT_CONCURRENCY_PATH="dist/Reynard.xcarchive/Products/Applications/Reynard.app/Frameworks/libswift_Concurrency.dylib"
+          if [ -f "$SWIFT_CONCURRENCY_PATH" ]; then
+            xcrun bitcode_strip "$SWIFT_CONCURRENCY_PATH" -r -o "$SWIFT_CONCURRENCY_PATH"
+            /usr/bin/codesign --force --sign - --verbose "$SWIFT_CONCURRENCY_PATH"
+          else
+            echo "::error::libswift_Concurrency.dylib not found in archive"
+            exit 1
+          fi
+
       - name: Package IPA
         run: ./tools/release/create-ipa.sh
 
