@@ -86,7 +86,11 @@ if [ "$BUILD_TYPE" = "--jailbroken" ]; then
 	# libhooker 系越狱拒绝加载 adhoc 签名的 libswift_Concurrency.dylib，
 	# 从最后一个正式签名的 0.10.0 里取原版
 	SWIFT_CONCURRENCY_DYLIB="Payload/Reynard.app/Frameworks/libswift_Concurrency.dylib"
-	if [ -f "$SWIFT_CONCURRENCY_DYLIB" ]; then
+	if [ ! -f "$SWIFT_CONCURRENCY_DYLIB" ]; then
+		echo "$SWIFT_CONCURRENCY_DYLIB is missing from the archive; the jailbroken build would crash on launch under libhooker."
+		exit 1
+	fi
+	{
 		SIGNED_IPA="Reynard-0.10.0.ipa"
 		SIGNED_DYLIB="Reynard-0.10.0.libswift_Concurrency.dylib"
 		cleanup_signed_ipa() {
@@ -112,7 +116,7 @@ if [ "$BUILD_TYPE" = "--jailbroken" ]; then
 
 		mv "$SIGNED_DYLIB" "$SWIFT_CONCURRENCY_DYLIB"
 		rm -f "$SIGNED_IPA"
-	fi
+	}
 fi
 
 zip -r "../$OUTPUT_NAME" Payload -x "._*" -x ".DS_Store" -x "__MACOSX"
