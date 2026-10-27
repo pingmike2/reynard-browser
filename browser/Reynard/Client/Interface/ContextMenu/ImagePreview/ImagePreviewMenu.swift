@@ -5,17 +5,19 @@
 //  Created by Minh Ton on 16/6/26.
 //
 
+import GeckoView
 import UIKit
 
 struct ImagePreviewMenu {
     static func configuration(
         for context: ContextMenuContext,
+        session: GeckoSession,
         showsPreview: Bool,
-        presentingController: UIViewController,
+        isPrivate: Bool,
         sourceView: UIView,
+        shareImage: @escaping (UIImage, UIView, CGRect) -> Void,
         openLinkInNewTab: @escaping (URL) -> Void,
         openLinkInNewPrivateTab: @escaping (URL) -> Void,
-        openLinkInBackground: @escaping (URL) -> Void,
         openImageInNewTab: @escaping () -> Void
     ) -> UIContextMenuConfiguration? {
         guard case let .image(url, linkURL) = context.target else {
@@ -23,49 +25,50 @@ struct ImagePreviewMenu {
         }
         
         let previewProvider: UIContextMenuContentPreviewProvider? = showsPreview ? {
-            ImagePreviewViewController(url: url)
+            ImagePreviewViewController(url: url, session: session)
         } : nil
         
         return UIContextMenuConfiguration(identifier: UUID().uuidString as NSString, previewProvider: previewProvider) { _ in
             var children: [UIMenuElement] = []
             if let linkURL {
-                children.append(
-                    UIMenu(title: "", options: .displayInline, children: [
-                        UIAction(title: NSLocalizedString("Open Link in New Tab", comment: ""), image: UIImage(named: "reynard.plus.square")) { _ in
-                            openLinkInNewTab(linkURL)
-                        },
-                        UIAction(title: NSLocalizedString("Open Link in New Private Tab", comment: ""), image: UIImage(named: "reynard.plus.square.fill")) { _ in
+                var linkActions: [UIMenuElement] = [
+                    UIAction(title: NSLocalizedString("Open Link in New Tab", comment: ""), image: UIImage(named: "reynard.plus.square.on.square")) { _ in
+                        openLinkInNewTab(linkURL)
+                    },
+                ]
+                if !isPrivate {
+                    linkActions.append(
+                        UIAction(title: NSLocalizedString("Open Link in New Private Tab", comment: ""), image: UIImage(named: "reynard.plus.square.fill.on.square.fill")) { _ in
                             openLinkInNewPrivateTab(linkURL)
-                        },
-                        UIAction(title: NSLocalizedString("Open Link in Background", comment: ""), image: UIImage(named: "reynard.plus.square.dashed")) { _ in
-                            openLinkInBackground(linkURL)
-                        },
-                    ])
+                        }
+                    )
+                }
+                children.append(
+                    UIMenu(title: "", options: .displayInline, children: linkActions)
                 )
             }
             
             children.append(
                 UIMenu(title: "", options: .displayInline, children: [
-                    UIAction(title: NSLocalizedString("Open Image in New Tab", comment: ""), image: UIImage(named: "reynard.plus.square")) { _ in
+                    UIAction(title: NSLocalizedString("Open Image in New Tab", comment: ""), image: UIImage(named: "reynard.plus.square.on.square")) { _ in
                         openImageInNewTab()
                     },
                     UIAction(title: NSLocalizedString("Share Image", comment: ""), image: UIImage(named: "reynard.square.and.arrow.up")) { _ in
-                        loadImage(from: url) { image in
-                            presentShareSheet(
-                                image: image,
-                                from: presentingController,
-                                sourceView: sourceView,
-                                sourcePoint: context.point
+                        loadImage(from: url, in: session) { image in
+                            shareImage(
+                                image,
+                                sourceView,
+                                CGRect(origin: context.point, size: .zero)
                             )
                         }
                     },
                     UIAction(title: NSLocalizedString("Save to Photos", comment: ""), image: UIImage(named: "reynard.square.and.arrow.down")) { _ in
-                        loadImage(from: url) { image in
+                        loadImage(from: url, in: session) { image in
                             UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
                         }
                     },
                     UIAction(title: NSLocalizedString("Copy Image", comment: ""), image: UIImage(named: "reynard.document.on.document")) { _ in
-                        loadImage(from: url) { image in
+                        loadImage(from: url, in: session) { image in
                             UIPasteboard.general.image = image
                         }
                     },
@@ -79,28 +82,17 @@ struct ImagePreviewMenu {
         }
     }
     
-    private static func loadImage(from url: URL, completion: @escaping @MainActor (UIImage) -> Void) {
+    private static func loadImage(from url: URL, in session: GeckoSession, completion: @escaping @MainActor (UIImage) -> Void) {
         Task {
-            guard let image = await ImagePreviewLoader.image(from: url) else {
+            guard let image = await ImagePreviewLoader.image(from: url, in: session),
+                  let cgImage = image.cgImage else {
                 return
             }
+            let exportImage = UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
             await MainActor.run {
-                completion(image)
+                completion(exportImage)
             }
         }
     }
     
-    private static func presentShareSheet(
-        image: UIImage,
-        from controller: UIViewController,
-        sourceView: UIView,
-        sourcePoint: CGPoint
-    ) {
-        let sheet = UIActivityViewController(activityItems: [image], applicationActivities: nil)
-        if let popover = sheet.popoverPresentationController {
-            popover.sourceView = sourceView
-            popover.sourceRect = CGRect(origin: sourcePoint, size: .zero)
-        }
-        controller.present(sheet, animated: true)
-    }
 }

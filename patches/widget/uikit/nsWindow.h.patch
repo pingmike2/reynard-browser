@@ -1,10 +1,19 @@
 diff --git a/widget/uikit/nsWindow.h b/widget/uikit/nsWindow.h
-index dd2d9e2be070..fa2f938dc62a 100644
+index 027dbf683744..da48a1bedaf7 100644
 --- a/widget/uikit/nsWindow.h
 +++ b/widget/uikit/nsWindow.h
-@@ -21,11 +21,14 @@ typedef struct objc_object ChildView;
+@@ -19,12 +19,23 @@
+ typedef struct objc_object ChildView;
  #endif
  
++namespace mozilla::ipc {
++class ByteBuf;
++}  // namespace mozilla::ipc
++
++namespace mozilla {
++struct NativeTextInputScrollUpdate;
++}  // namespace mozilla
++
  namespace mozilla::layers {
 +struct APZHandledResult;
  class NativeLayerRootCA;
@@ -18,7 +27,7 @@ index dd2d9e2be070..fa2f938dc62a 100644
  class TextInputHandler;
  }  // namespace mozilla::widget
  
-@@ -55,12 +58,16 @@ class nsWindow final : public nsIWidget {
+@@ -54,12 +65,16 @@ class nsWindow final : public nsIWidget {
    LayoutDeviceIntPoint WidgetToScreenOffset() override;
  
    void SetBackgroundColor(const nscolor& aColor) override;
@@ -36,19 +45,29 @@ index dd2d9e2be070..fa2f938dc62a 100644
    void Resize(const DesktopSize&, bool aRepaint) override;
    void Resize(const DesktopRect&, bool aRepaint) override;
    void DoResize(double aX, double aY, double aWidth, double aHeight,
-@@ -77,8 +84,19 @@ class nsWindow final : public nsIWidget {
+@@ -76,8 +91,29 @@ class nsWindow final : public nsIWidget {
      // XXX: terrible
      return 326.0f;
    }
 +  uint32_t GetMaxTouchPoints() const override;
    double GetDefaultScaleInternal() override { return BackingScaleFactor(); }
    int32_t RoundsWidgetCoordinatesTo() override;
-+  void NotifyCompositorScrollUpdate(
-+      const mozilla::layers::CompositorScrollUpdate& aUpdate) override;
-+  void UpdateDynamicToolbarOffset(mozilla::ScreenIntCoord aOffset);
-+  void UpdateDynamicToolbarMaxHeight(mozilla::ScreenIntCoord aHeight) override;
++  void NotifyCompositorScrollUpdates(
++      const nsTArray<mozilla::layers::CompositorScrollUpdate>& aUpdates)
++      override;
++
++  void UpdateDynamicToolbarOffset(mozilla::ScreenIntCoord aTopOffset,
++                                  mozilla::ScreenIntCoord aBottomOffset,
++                                  mozilla::ScreenIntCoord aTopInset,
++                                  mozilla::ScreenIntCoord aBottomInset,
++                                  mozilla::ScreenIntCoord aContentTranslationY);
++  void UpdateDynamicToolbarHeights(mozilla::ScreenIntCoord aMaxHeight,
++                                   mozilla::ScreenIntCoord aMinHeight);
 +  mozilla::ScreenIntCoord GetDynamicToolbarMaxHeight() const override {
 +    return mDynamicToolbarMaxHeight;
++  }
++  mozilla::ScreenIntCoord GetDynamicToolbarMinHeight() const override {
++    return mDynamicToolbarMinHeight;
 +  }
 +
 +  mozilla::LayoutDeviceIntMargin GetSafeAreaInsets() const override;
@@ -56,7 +75,7 @@ index dd2d9e2be070..fa2f938dc62a 100644
  
    nsresult SetTitle(const nsAString& aTitle) override { return NS_OK; }
  
-@@ -93,22 +111,32 @@ class nsWindow final : public nsIWidget {
+@@ -92,22 +128,42 @@ class nsWindow final : public nsIWidget {
    void SetInputContext(const InputContext& aContext,
                         const InputContextAction& aAction) override;
    InputContext GetInputContext() override;
@@ -71,6 +90,7 @@ index dd2d9e2be070..fa2f938dc62a 100644
      return mTextInputHandler;
    }
 +  bool FocusForHardwareKeyboard();
++  void DismissSoftwareKeyboard();
    bool IsVirtualKeyboardDisabled() const;
 -
 -  /*
@@ -87,6 +107,15 @@ index dd2d9e2be070..fa2f938dc62a 100644
 +      mozilla::NativeKeyBindingsType aType,
 +      const mozilla::WidgetKeyboardEvent& aEvent,
 +      nsTArray<mozilla::CommandInt>& aCommands) override;
++
++  void SetNativeTextInputScrollers(
++      const nsTArray<mozilla::layers::ScrollableLayerGuid>& aScrollers);
++  void OnUiCompositorControllerOpen() override;
++  void NotifyNativeTextInputScrollUpdates(mozilla::ipc::ByteBuf&& aData);
++  const mozilla::NativeTextInputScrollUpdate* GetNativeTextInputScrollUpdate(
++      const mozilla::layers::ScrollableLayerGuid& aGuid) const;
++  bool IsAsyncScrolling(
++      const nsTArray<mozilla::layers::ScrollableLayerGuid>& aScrollers) const;
  
    mozilla::layers::NativeLayerRoot* GetNativeLayerRoot() override;
 +  void GetCompositorWidgetInitData(
@@ -97,7 +126,7 @@ index dd2d9e2be070..fa2f938dc62a 100644
  
    void HandleMainThreadCATransaction();
  
-@@ -138,6 +166,16 @@ class nsWindow final : public nsIWidget {
+@@ -137,6 +193,17 @@ class nsWindow final : public nsIWidget {
      mIOSView = aView;
    }
    mozilla::widget::IOSView* GetIOSView() const { return mIOSView; }
@@ -106,7 +135,8 @@ index dd2d9e2be070..fa2f938dc62a 100644
 +  bool DispatchWindowEvent(mozilla::WidgetGUIEvent& aEvent) override;
 +  void DispatchPanGestureInput(mozilla::PanGestureInput& aInput);
 +  using nsIWidget::DispatchPinchGestureInput;
-+  void DispatchTouchStart(mozilla::WidgetTouchEvent* aEvent,
++  using nsIWidget::DispatchTouchInput;
++  void DispatchTouchStart(mozilla::MultiTouchInput& aInput,
 +                          uint64_t aSequenceId);
 +  void NotifyAPZInputResult(
 +      uint64_t aSequenceId,
@@ -114,7 +144,7 @@ index dd2d9e2be070..fa2f938dc62a 100644
  
   protected:
    virtual ~nsWindow();
-@@ -147,6 +185,8 @@ class nsWindow final : public nsIWidget {
+@@ -146,6 +213,8 @@ class nsWindow final : public nsIWidget {
    nsresult GetCurrentOffset(uint32_t& aOffset, uint32_t& aLength);
    nsresult DeleteRange(int aOffset, int aLen);
  
@@ -123,12 +153,13 @@ index dd2d9e2be070..fa2f938dc62a 100644
    void TearDownView();
  
    ChildView* mNativeView;
-@@ -156,13 +196,20 @@ class nsWindow final : public nsIWidget {
+@@ -155,13 +224,23 @@ class nsWindow final : public nsIWidget {
    nsWindow* mParent;
  
    mozilla::widget::InputContext mInputContext;
 +  bool mSoftwareKeyboardSuppressed;
    RefPtr<mozilla::widget::TextInputHandler> mTextInputHandler;
++  nsTArray<mozilla::NativeTextInputScrollUpdate> mNativeTextInputScrollUpdates;
    RefPtr<mozilla::widget::IOSView> mIOSView;
 +  mozilla::widget::PlatformCompositorWidgetDelegate* mCompositorWidgetDelegate =
 +      nullptr;
@@ -140,6 +171,8 @@ index dd2d9e2be070..fa2f938dc62a 100644
    RefPtr<mozilla::CancelableRunnable> mUnsuspendAsyncCATransactionsRunnable;
    LayoutDeviceIntRect mBounds;
 +  mozilla::ScreenIntCoord mDynamicToolbarMaxHeight{0};
++  mozilla::ScreenIntCoord mDynamicToolbarMinHeight{0};
++  mozilla::ScreenIntCoord mContentTopInset{0};
 +  mozilla::LayoutDeviceIntMargin mSafeAreaInsets;
  
    void OnSizeChanged(const mozilla::gfx::IntSize& aSize);

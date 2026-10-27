@@ -12,6 +12,7 @@ import Foundation
 public enum LoadRequestTarget {
     case current
     case new
+    case background
 }
 
 public struct LoadRequest {
@@ -24,18 +25,20 @@ public struct LoadRequest {
     public let isDirectNavigation: Bool
 }
 
+private func loadRequestTarget(from value: Int32) -> LoadRequestTarget {
+    switch value {
+    case 0, 1:
+        return .current
+    case 5:
+        return .background
+    default:
+        return .new
+    }
+}
+
 private func loadRequest(from message: [String: Any?]?) -> LoadRequest? {
     guard let uri = message?["uri"] as? String else {
         return nil
-    }
-    
-    func convertTarget(_ value: Int32) -> LoadRequestTarget {
-        switch value {
-        case 0, 1:
-            return .current
-        default:
-            return .new
-        }
     }
     
     let flags = PayloadValue.int(message?["flags"]) ?? 0
@@ -46,7 +49,7 @@ private func loadRequest(from message: [String: Any?]?) -> LoadRequest? {
     return LoadRequest(
         uri: uri,
         triggerUri: message?["triggerUri"] as? String,
-        target: convertTarget(targetValue),
+        target: loadRequestTarget(from: targetValue),
         isRedirect: (flags & isRedirectFlag) != 0,
         hasUserGesture: hasUserGesture,
         isUserInitiatedNavigation:
@@ -64,7 +67,13 @@ public protocol NavigationDelegate {
     func onLoadRequest(session: GeckoSession, request: LoadRequest) async -> AllowOrDeny
     func onPreNavigation(session: GeckoSession, request: LoadRequest) async -> AllowOrDeny
     func onSubframeLoadRequest(session: GeckoSession, request: LoadRequest) async -> AllowOrDeny
-    func onNewSession(session: GeckoSession, uri: String, windowId: String) async -> GeckoSession?
+    func onLoadError(session: GeckoSession, error: WebRequestError) -> String?
+    func onNewSession(
+        session: GeckoSession,
+        uri: String,
+        windowId: String,
+        target: LoadRequestTarget
+    ) async -> GeckoSession?
 }
 
 extension NavigationDelegate {
@@ -74,7 +83,8 @@ extension NavigationDelegate {
     public func onLoadRequest(session: GeckoSession, request: LoadRequest) async -> AllowOrDeny { .allow }
     public func onPreNavigation(session: GeckoSession, request: LoadRequest) async -> AllowOrDeny { .allow }
     public func onSubframeLoadRequest(session: GeckoSession, request: LoadRequest) async -> AllowOrDeny { .allow }
-    public func onNewSession(session: GeckoSession, uri: String, windowId: String) async -> GeckoSession? { nil }
+    public func onLoadError(session: GeckoSession, error: WebRequestError) -> String? { nil }
+    public func onNewSession(session: GeckoSession, uri: String, windowId: String, target: LoadRequestTarget) async -> GeckoSession? { nil }
 }
 
 // MARK: - Navigation Events
@@ -126,10 +136,15 @@ func newNavigationHandler(_ session: GeckoSession) -> GeckoSessionHandler {
                 return false
             }
             
+            let target = loadRequestTarget(
+                from: PayloadValue.int32(message?["where"]) ?? 2
+            )
+            
             if let newSession = await delegate?.onNewSession(
                 session: session,
                 uri: uri,
-                windowId: requestedWindowID
+                windowId: requestedWindowID,
+                target: target
             ) {
                 if let windowId = newSession.id,
                    windowId != requestedWindowID {
@@ -144,7 +159,7 @@ func newNavigationHandler(_ session: GeckoSession) -> GeckoSessionHandler {
             return false
             
         case .onLoadError:
-            return nil
+            return delegate?.onLoadError(session: session, error: WebRequestError(message: message))
             
         case .onLoadRequest:
             guard let request = loadRequest(from: message) else {

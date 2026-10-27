@@ -14,6 +14,7 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         static let fallbackTopInset: CGFloat = 24
         static let keyboardAnimationDuration: TimeInterval = 0.25
         static let keyboardAnimationCurve: UInt = 7
+        static let floatingKeyboardWidthRatio: CGFloat = 0.8
     }
     
     private struct KeyboardAnimation {
@@ -24,7 +25,7 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
     // MARK: - State
     
     let sessionManager = SessionManager()
-    lazy var tabManager: TabManager = TabManagerImplementation(
+    lazy var tabManager = TabManagerImplementation(
         delegate: self,
         sessionManager: sessionManager
     )
@@ -34,6 +35,7 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         orientations: UIInterfaceOrientationMask,
         completion: (GeckoOrientationLockResult) -> Void
     )?
+    private var preFullscreenOrientation: UIInterfaceOrientation?
     weak var fullscreenSession: GeckoSession?
     private let allowsSidebarHosting: Bool
     private var shouldRestoreContentFocus = false
@@ -43,10 +45,11 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
     
     // MARK: - Views And Coordinators
     
-    let tabBar = TabBar()
     let tabOverview = TabOverview()
     let contentView = ContentView()
     lazy var browserChrome = BrowserChrome()
+    var tabBar: TabBar { return browserChrome.tabBar }
+    
     private(set) lazy var toolbarController = ToolbarController(
         browserChrome: browserChrome,
         tabBar: tabBar,
@@ -85,6 +88,30 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
     
     // MARK: - Lifecycle
     
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        if #available(iOS 26.0, *) {
+            return .default
+        }
+        
+        guard browserLayout.chromeMode == .phone,
+              !tabOverview.isPresented else {
+            return .default
+        }
+        
+        switch contentView.state.overlayPresentation {
+        case .visible(.homepage):
+            let foregroundColor = HomepageWallpaper.foregroundColor(for: .embedded(layout: browserLayout))
+            return foregroundColor.isLightColor(in: traitCollection) ? .lightContent : .darkContent
+        case .visible(.search):
+            return .default
+        case .hidden:
+            let backgroundColor = tabManager.selectedTab.map {
+                sessionManager.pageBackgroundColor(for: $0.session)
+            } ?? .systemBackground
+            return backgroundColor.isLightColor(in: traitCollection) ? .darkContent : .lightContent
+        }
+    }
+    
     override var prefersStatusBarHidden: Bool {
         return isShowingFullscreenMedia
     }
@@ -117,9 +144,6 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
     
     deinit {
         stopScreenOrientationHandling()
-        if isShowingFullscreenMedia {
-            UIApplication.shared.isIdleTimerDisabled = false
-        }
         NotificationCenter.default.removeObserver(self)
     }
     
@@ -131,7 +155,8 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
             return
         }
         
-        applyGeckoPreferences()
+        RuntimePreferences.apply() // Gecko prefs
+        
         configureBrowserInterface()
         observeNotifications()
         contextMenuCoordinator.configure()
@@ -142,7 +167,7 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         browserChrome.syncSidebarButton(splitViewController: splitViewController)
         applyUpdateMenuButtonBadge()
         
-        tabManager.createInitialTab(openingScreen: Prefs.HomepageSettings.openingScreen)
+        tabManager.createInitialTab()
         refreshAddressBar()
         homepageOverlayCoordinator.updatePresentation(animated: false)
         
@@ -189,14 +214,19 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
                 shouldRestoreContentFocus = false
                 requestContentKeyboardFocus()
             }
+            
+            requestHomepageAddressBarFocus()
         }
     }
     
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        
+        let showsHomepage = tabManager.selectedTab.map(homepageOverlayCoordinator.isHomepageTab) ?? false
         toolbarController.updateLayout(
             chromeMode: browserLayout.chromeMode,
-            isToolbarEnabled: !isShowingFullscreenMedia
+            isToolbarEnabled: !isShowingFullscreenMedia,
+            extendsContentBehindToolbar: showsHomepage
         )
         homepageOverlayCoordinator.updateVisibleContentInsets()
         invalidateNavigationThumbnailsIfNeeded()
@@ -204,20 +234,28 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
     
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        if sidebarCoordinator.refreshHostVisibility() {
-            return
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.isViewLoaded,
+                  self.view.window != nil,
+                  !self.sidebarCoordinator.refreshHostVisibility() else {
+                return
+            }
+            self.syncBrowserNavigationChrome(animated: false)
+            self.browserChrome.syncSidebarButton(splitViewController: self.splitViewController)
+            self.refreshAddressBar()
+            self.updateBrowserLayout(animated: false)
+            self.tabOverview.invalidateCollectionLayouts()
+            self.tabBar.invalidateLayout()
+            self.tabOverview.refreshForCurrentOrientation()
         }
-        syncBrowserNavigationChrome(animated: false)
-        browserChrome.syncSidebarButton(splitViewController: splitViewController)
-        refreshAddressBar()
-        updateBrowserLayout(animated: false)
-        tabOverview.invalidateCollectionLayouts()
-        tabBar.invalidateLayout()
-        tabOverview.refreshForCurrentOrientation()
     }
     
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
+        if let readerSettings = presentedViewController as? ReaderSettingsViewController {
+            readerSettings.dismiss(animated: false)
+        }
         performContentLifecycle {
             toolbarController.reset(animated: false)
             coordinator.animate { _ in
@@ -241,20 +279,13 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         }
     }
     
-    // MARK: - Preferences
-    
-    private func applyGeckoPreferences() {
-        // HTTPS-only mode
-        HTTPSOnlyModePolicyController.applyHTTPSOnlyMode()
-        
-        // Tracking Protection
-        TrackingProtectionPolicyController.applyEnhancedTrackingProtection()
-        TrackingProtectionPolicyController.applyGlobalPrivacyControl()
-    }
-    
     // MARK: - Browser Layout
     
     private func configureBrowserInterface() {
+        contentView.keyCommandDelegate = self
+        contentView.onAppearanceChanged = { [weak self] in
+            self?.setNeedsStatusBarAppearanceUpdate()
+        }
         browserChrome.configureAddressBar(
             delegate: self,
             searchDelegate: self,
@@ -265,7 +296,6 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         tabOverview.configure(dataSource: self, delegate: self, presentationContext: self)
         
         view.addSubview(contentView)
-        view.addSubview(tabBar)
         view.addSubview(browserChrome)
         view.addSubview(tabOverview)
         contentView.configureLayout(
@@ -282,10 +312,6 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
             browserChrome.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             browserChrome.topAnchor.constraint(equalTo: view.topAnchor),
             browserChrome.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            
-            tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tabBar.topAnchor.constraint(equalTo: browserChrome.topToolbarBottomAnchor),
             
             tabOverview.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabOverview.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -304,21 +330,127 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         contentView.onHistorySwipeBegan = { [weak self] in
             self?.captureOutgoingHistoryThumbnail()
         }
+        contentView.onErrorAction = { [weak self] action in
+            self?.performErrorPageAction(action)
+        }
         browserChrome.onSidebar = { [weak self] in
             self?.sidebarCoordinator.toggle(animated: true)
         }
         browserChrome.onBack = { [weak self] in
-            self?.toolbarController.reset()
-            self?.captureOutgoingHistoryThumbnail()
+            self?.toolbarController.reset(preserveManualCollapse: true)
+            self?.prepareThumbnailForNavigation()
             self?.tabManager.goBack()
         }
         browserChrome.onForward = { [weak self] in
-            self?.toolbarController.reset()
-            self?.captureOutgoingHistoryThumbnail()
+            self?.toolbarController.reset(preserveManualCollapse: true)
+            self?.prepareThumbnailForNavigation()
             self?.tabManager.goForward()
         }
+        browserChrome.configureNavigationMenus(
+            itemsProvider: { [weak self] direction in
+                guard let self,
+                      let tab = self.tabManager.selectedTab else {
+                    return []
+                }
+                
+                let snapshot = self.tabManager.navigationHistory(for: tab)
+                switch direction {
+                case .back:
+                    return snapshot.backHistory
+                case .forward:
+                    return snapshot.forwardHistory
+                }
+            },
+            onSelect: { [weak self] direction, index in
+                guard let self else {
+                    return
+                }
+                
+                self.toolbarController.reset(preserveManualCollapse: true)
+                self.prepareThumbnailForNavigation()
+                switch direction {
+                case .back:
+                    self.tabManager.goBack(to: index)
+                case .forward:
+                    self.tabManager.goForward(to: index)
+                }
+            }
+        )
+        browserChrome.configureLibraryMenus { [weak self] section in
+            self?.presentLibrary(initialSection: section)
+        }
+        browserChrome.configureRecentlyClosedTabsMenu(
+            isAvailable: { [weak self] in
+                guard let self else {
+                    return false
+                }
+                return self.tabManager.selectedTabMode == .regular
+            },
+            itemsProvider: {
+                TabManagementStore.shared.recentlyClosedTabs(
+                    limit: Prefs.HomepageSettings.recentlyClosedTabLimit
+                )
+            },
+            onSelect: { [weak self] id in
+                guard let self,
+                      self.tabManager.selectedTabMode == .regular else {
+                    return
+                }
+                
+                self.toolbarController.reset()
+                self.dismissAddressBarEditingAndOverlays()
+                _ = self.tabManager.restoreRecentlyClosedTab(id: id)
+            }
+        )
+        browserChrome.configureTabOverviewMenus(
+            tabCountProvider: { [weak self] in
+                self?.tabManager.activeTabs.count ?? 0
+            },
+            onCloseAllTabs: { [weak self] in
+                self?.closeAllTabs()
+            },
+            onCloseTab: { [weak self] in
+                self?.closeTab()
+            },
+            onNewPrivateTab: { [weak self] in
+                self?.createNewTabAnimated(mode: .private)
+            },
+            onNewTab: { [weak self] in
+                self?.createNewTabAnimated(mode: .regular)
+            }
+        )
         browserChrome.onShare = { [weak self] in
-            self?.presentShareSheet()
+            guard let self else {
+                return
+            }
+            guard let tab = self.tabManager.selectedTab,
+                  let url = self.tabManager.shareableURL(for: tab) else {
+                return
+            }
+            let sourceView = self.browserChrome.sharePopoverSourceView()
+            self.presentShareSheet(
+                items: [url],
+                sourceView: sourceView,
+                sourceRect: sourceView.bounds,
+                applicationActivities: [
+                    BookmarkActivity(url: url),
+                    AddToFavoritesActivity(url: url),
+                    FindInPageActivity(url: url),
+                    PagePrintActivity(session: tab.session, jobName: tab.title)
+                ],
+                onActivityPerformed: { [weak self] activityType in
+                    guard let self else {
+                        return
+                    }
+                    if activityType == BookmarkActivity.identifier {
+                        self.presentBookmarkEditor(addToFavorites: false)
+                    } else if activityType == AddToFavoritesActivity.identifier {
+                        self.presentBookmarkEditor(addToFavorites: true)
+                    } else if activityType == FindInPageActivity.identifier {
+                        self.browserChrome.showActionBar(.findInPage(), animated: true)
+                    }
+                }
+            )
         }
         browserChrome.onLibrary = { [weak self] in
             self?.presentLibrary()
@@ -368,10 +500,14 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         }
         browserChrome.onFindInPageVisibilityChanged = { [weak self] visible in
             if visible {
-                self?.toolbarController.collapse(animated: false)
+                self?.toolbarController.collapseBottomToolbar()
             } else {
-                self?.toolbarController.reset()
+                self?.toolbarController.restoreBottomToolbar()
+                self?.requestContentKeyboardFocus()
             }
+        }
+        browserChrome.onKeyboardDismissal = { [weak self] in
+            self?.tabManager.selectedTab?.session.dismissSoftwareKeyboard()
         }
     }
     
@@ -390,10 +526,12 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         let previousLayout = browserLayout
         browserLayout = resolveBrowserLayout()
         if browserLayout != previousLayout {
+            if let readerSettings = presentedViewController as? ReaderSettingsViewController {
+                readerSettings.dismiss(animated: false)
+            }
             dismissAddressBarEditingAndOverlays()
         }
         applyBrowserLayout(animated: animated)
-        homepageOverlayCoordinator.updatePresentedLayout()
         homepageOverlayCoordinator.updatePresentation(animated: false)
         searchOverlayCoordinator.updatePresentedLayout()
         
@@ -446,13 +584,14 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
             case .compact:
                 applyCompactLayout()
             case .pad:
-                applyPadLayout()
+                applyPadLayout(animated: animated)
             }
         }
         
         applyTabOverviewLayout()
         applyBrowserChromeLayout(animated: animated)
         updateNavigationButtons()
+        setNeedsStatusBarAppearanceUpdate()
     }
     
     private func applyFullscreenLayout() {
@@ -473,7 +612,7 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
             ? view.safeAreaLayoutGuide.bottomAnchor
             : browserChrome.bottomToolbarTopAnchor
         )
-        setTabBarVisible(false)
+        tabBar.setVisibility(.hidden, animated: false)
     }
     
     private func applyCompactLayout() {
@@ -482,19 +621,16 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
             topAnchor: browserChrome.topToolbarBottomAnchor,
             bottomAnchor: browserChrome.bottomToolbarTopAnchor
         )
-        setTabBarVisible(false)
+        tabBar.setVisibility(.hidden, animated: false)
     }
     
-    private func applyPadLayout() {
+    private func applyPadLayout(animated: Bool) {
         contentView.applyLayout(
             ContentView.LayoutState(mode: .standard),
-            topAnchor: tabBar.bottomAnchor,
+            topAnchor: browserChrome.tabBarBottomAnchor,
             bottomAnchor: view.bottomAnchor
         )
-        let showsTabBar = browserLayout.interfaceIdiom == .pad
-        ? visibleTabCount > 1
-        : visibleTabCount > 1 && Prefs.AppearanceSettings.showsLandscapeTabBar
-        setTabBarVisible(showsTabBar)
+        tabBar.setVisibility(targetTabBarVisibility, animated: animated)
     }
     
     private var visibleTabCount: Int {
@@ -504,11 +640,18 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         return tabs.count
     }
     
-    private func setTabBarVisible(_ visible: Bool) {
-        tabBar.setVisibility(
-            visible ? (tabOverview.isPresented ? .layoutReserved : .visible) : .hidden,
-            animated: false
-        )
+    var targetTabBarVisibility: TabBar.Visibility {
+        guard browserLayout.chromeMode == .pad else {
+            return .hidden
+        }
+        
+        let showsTabBar = browserLayout.interfaceIdiom == .pad
+        ? visibleTabCount > 1
+        : visibleTabCount > 1 && Prefs.AppearanceSettings.showsLandscapeTabBar
+        guard showsTabBar else {
+            return .hidden
+        }
+        return tabOverview.isPresented ? .layoutReserved : .visible
     }
     
     private func applyTabOverviewLayout() {
@@ -676,6 +819,12 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
     private func observeNotifications() {
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(setNeedsStatusBarAppearanceUpdate),
+            name: .homepageSettingsDidChange,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(keyboardFrameWillChange(_:)),
             name: UIResponder.keyboardWillChangeFrameNotification,
             object: nil
@@ -688,6 +837,12 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(selectionSystemUIDidDismiss(_:)),
+            name: .selectionSystemUIDidDismiss,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(addressBarPositionDidChange),
             name: .addressBarPositionDidChange,
             object: nil
@@ -696,6 +851,12 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
             self,
             selector: #selector(landscapeTabBarDidChange),
             name: .landscapeTabBarDidChange,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appearanceGestureSettingsDidChange),
+            name: .appearanceGestureSettingsDidChange,
             object: nil
         )
         NotificationCenter.default.addObserver(
@@ -725,11 +886,44 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         updateBrowserLayout(animated: true)
     }
     
+    @objc private func appearanceGestureSettingsDidChange() {
+        updateBrowserLayout(animated: false)
+    }
+    
     @objc func applyUpdateMenuButtonBadge() {
         browserChrome.setMenuButtonIndicatesUpdate(BrowserUpdates.shared.hasUpdate)
     }
     
     // MARK: - Keyboard
+    
+    func requestHomepageAddressBarFocus() {
+        let expectedSession = tabManager.selectedTab?.session
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let tab = tabManager.selectedTab,
+                  tab.session === expectedSession else {
+                return
+            }
+            
+            guard homepageOverlayCoordinator.isHomepageTab(tab),
+                  tab.session.isInHardwareKeyboardMode() else {
+                return
+            }
+            
+            guard !tabOverview.isPresented,
+                  !tabOverview.isTransitionRunning else {
+                return
+            }
+            
+            guard !browserChrome.isAddressBarEditing,
+                  presentedControllerInHierarchy == nil else {
+                return
+            }
+            
+            browserChrome.addressBar.focusForHardwareKeyboard()
+        }
+    }
     
     func requestContentKeyboardFocus(for expectedSession: GeckoSession? = nil) {
         DispatchQueue.main.async { [weak self] in
@@ -776,52 +970,81 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         return nil
     }
     
+    @objc private func selectionSystemUIDidDismiss(_ notification: Notification) {
+        guard let source = notification.object as? UIView,
+              let session = tabManager.selectedTab?.session,
+              let engineView = session.engineView,
+              source.isDescendant(of: engineView) else {
+            return
+        }
+        
+        requestContentKeyboardFocus(for: session)
+    }
+    
     @objc private func keyboardFrameWillChange(_ notification: Notification) {
         guard let frameValue = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else {
             return
         }
         
-        let keyboardFrame = view.convert(frameValue.cgRectValue, from: nil)
-        let keyboardInset = max(
-            0,
-            view.bounds.maxY - keyboardFrame.minY - view.safeAreaInsets.bottom
-        )
-        let keyboardOverlap = max(0, view.bounds.maxY - keyboardFrame.minY)
-        let animation = keyboardAnimation(from: notification)
-        let isInHardwareKeyboardMode = tabManager.selectedTab?.session.isInHardwareKeyboardMode() == true
-        if !searchOverlayCoordinator.isFocused
-            && !tabOverview.isPresented
-            && keyboardInset > 0
-            && !isInHardwareKeyboardMode {
-            contentView.relocateFocusedInput(
-                above: keyboardFrame,
-                animationDuration: animation.duration,
-                animationOptions: animation.curve
-            )
-        } else {
-            contentView.resetFocusedInputRelocation(
-                animationDuration: animation.duration,
-                animationOptions: animation.curve
-            )
+        let isHardwareKeyboardMode = tabManager.selectedTab?.session.isInHardwareKeyboardMode() == true
+        
+        if !isHardwareKeyboardMode {
+            browserChrome.addressBar.restoreEditingLayout()
         }
         
-        let shouldDockActionBar = !tabOverview.isPresented
-        && keyboardInset > 0
-        && !isInHardwareKeyboardMode
-        && browserChrome.isShowingFindInPage
-        let shouldDockChrome = !tabOverview.isPresented
-        && keyboardInset > 0
-        && !isInHardwareKeyboardMode
-        && (
-            browserLayout.chromeMode == .phone && searchOverlayCoordinator.isFocused
-        )
+        let keyboardFrame = view.convert(frameValue.cgRectValue, from: nil)
+        let keyboardOverlap = max(0, view.bounds.maxY - keyboardFrame.minY)
+        let keyboardInset = max(0, keyboardOverlap - view.safeAreaInsets.bottom)
+        let spansWindow = view.bounds.width > 0
+        && keyboardFrame.width >= view.bounds.width * UX.floatingKeyboardWidthRatio
+        let sitsFlushWithBottom = keyboardFrame.maxY >= view.bounds.maxY - 8
+        let isFloatingKeyboard = browserLayout.interfaceIdiom == .pad
+        && !(spansWindow && sitsFlushWithBottom)
+        let shouldAdjustForKeyboard = keyboardInset > 0
+        && !isFloatingKeyboard
+        && !tabOverview.isPresented
+        && !isHardwareKeyboardMode
+        
+        let presentedController = presentedControllerInHierarchy
+        let shouldRelocateInput = shouldAdjustForKeyboard
+        && !searchOverlayCoordinator.isFocused
+        && !browserChrome.isShowingFindInPage
+        && (presentedController == nil || presentedController?.isBeingDismissed == true)
+        
+        if shouldRelocateInput {
+            toolbarController.lock(for: .inputRelocation)
+        } else {
+            toolbarController.unlock(for: .inputRelocation)
+        }
+        
+        let animation = keyboardAnimation(from: notification)
+        if shouldRelocateInput && browserLayout.interfaceIdiom == .phone {
+            browserChrome.showActionBar(.keyboardDismissal, animated: false)
+        } else if browserChrome.isShowingKeyboardDismissal {
+            browserChrome.dismissActionBar(animated: false)
+        }
+        let shouldDockActionBar = shouldAdjustForKeyboard
+        && (browserChrome.isShowingFindInPage || browserChrome.isShowingKeyboardDismissal)
+        let shouldDockAddressBar = shouldAdjustForKeyboard
+        && browserLayout.chromeMode == .phone && searchOverlayCoordinator.isFocused
         browserChrome.dockActionBar(offset: shouldDockActionBar ? -keyboardOverlap : 0)
-        browserChrome.dockAddressBar(offset: shouldDockChrome ? -keyboardInset : 0)
+        browserChrome.dockAddressBar(offset: shouldDockAddressBar ? -keyboardInset : 0)
         animateLayout(animation)
+        
+        contentView.updateFocusedInputRelocation(
+            above: shouldRelocateInput ? keyboardFrame : nil,
+            bottomInset: browserChrome.isShowingKeyboardDismissal ? ActionBarStyle.compact.height : 0,
+            animationDuration: animation.duration,
+            animationOptions: animation.curve
+        )
     }
     
     @objc private func keyboardWillHide(_ notification: Notification) {
+        toolbarController.unlock(for: .inputRelocation)
         let animation = keyboardAnimation(from: notification)
+        if browserChrome.isShowingKeyboardDismissal {
+            browserChrome.dismissActionBar(animated: false)
+        }
         contentView.resetFocusedInputRelocation(
             animationDuration: animation.duration,
             animationOptions: animation.curve
@@ -871,16 +1094,16 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         }
         
         browserChrome.updateNavigation(
-            canGoBack: tab.state.navigationState.canGoBack,
+            canGoBack: tabManager.canGoBack,
             canGoForward: tab.state.navigationState.canGoForward,
             canShare: tabManager.shareableURL(for: tab) != nil
         )
         
         let previewImages = tabManager.navigationPreviewImages(for: tab)
         contentView.setHistoryNavigation(
-            canGoBack: tab.state.navigationState.canGoBack,
+            canGoBack: tabManager.canGoBack,
             canGoForward: tab.state.navigationState.canGoForward,
-            backPreviewImage: previewImages.backImage,
+            backPreviewImage: tab.state.navigationState.canGoBack ? previewImages.backImage : nil,
             forwardPreviewImage: previewImages.forwardImage,
             isSwipeEnabled: true
         )
@@ -908,8 +1131,17 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         sidebarCoordinator.setFullscreen(fullScreen)
         isShowingFullscreenMedia = fullScreen
         updateBrowserLayout(animated: false)
-        UIApplication.shared.isIdleTimerDisabled = fullScreen
+        updateFullscreenOrientation(fullScreen)
         requestContentKeyboardFocus(for: tabManager.selectedTab?.session)
+    }
+    
+    func exitFullscreenIfNeeded() {
+        guard isShowingFullscreenMedia,
+              let session = fullscreenSession else {
+            return
+        }
+        session.exitFullScreen()
+        applyFullscreenState(false, for: session)
     }
     
     // MARK: - Orientation
@@ -975,6 +1207,31 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
         if #available(iOS 16.0, *) {
             setNeedsUpdateOfSupportedInterfaceOrientations()
         }
+        updateFullscreenOrientation(false)
+    }
+    
+    private func updateFullscreenOrientation(_ fullScreen: Bool) {
+        guard browserLayout.interfaceIdiom == .phone else {
+            return
+        }
+        
+        if fullScreen {
+            if let interfaceOrientation = view.window?.windowScene?.interfaceOrientation,
+               interfaceOrientation != .unknown {
+                preFullscreenOrientation = interfaceOrientation
+            } else {
+                preFullscreenOrientation = .portrait
+            }
+            return
+        }
+        
+        guard !isShowingFullscreenMedia,
+              lockedOrientations == nil,
+              let preFullscreenOrientation else {
+            return
+        }
+        self.preFullscreenOrientation = nil
+        forceInterfaceOrientation(preFullscreenOrientation)
     }
     
     private func completePendingOrientationRequestIfSatisfied() {
@@ -1043,7 +1300,7 @@ final class BrowserViewController: UIViewController, GeckoScreenOrientationDeleg
             return
         }
         
-        tabManager.selectedTab?.session.notifyScreenOrientationChanged(to: interfaceOrientation)
+        sidebarCoordinator.notifyScreenOrientationChanged(to: interfaceOrientation)
         completePendingOrientationRequestIfSatisfied()
     }
     

@@ -13,6 +13,7 @@ protocol AddonCoordinatorDataSource: AnyObject {
     var isSelectedAddonTabPrivate: Bool { get }
     var addonTabs: [Tab] { get }
     var selectedAddonTabMode: TabMode { get }
+    var shouldPresentAddonPopupAsPopover: Bool { get }
     
     func indexOfAddonTab(for session: GeckoSession) -> Int?
 }
@@ -33,6 +34,8 @@ protocol AddonCoordinatorDelegate: AnyObject {
     ) -> Tab?
     func selectAddonTab(_ coordinator: AddonCoordinator, at index: Int, mode: TabMode?)
     func closeAddonTab(_ coordinator: AddonCoordinator, at index: Int, mode: TabMode?)
+    @MainActor
+    func confirmAddonDownload(_ coordinator: AddonCoordinator, options: [String: Any?]) async -> DownloadStore.WebExtensionDownloadItem?
     func restoreAddonTabInteraction(_ coordinator: AddonCoordinator)
 }
 
@@ -50,6 +53,7 @@ final class AddonCoordinator: NSObject, AddonEmbedderDelegate {
     private let iconLoadingQueue = DispatchQueue(label: "com.minh-ton.Reynard.AddonCoordinator.IconLoadingQueue", qos: .utility)
     private var loadingIconIDs = Set<String>()
     private var pendingAddonDownloadPaths = Set<String>()
+    private var pendingWebExtensionDownloadsByPath: [String: DownloadStore.WebExtensionDownloadItem] = [:]
     let updateCoordinator: AddonUpdateCoordinator
     
     init(
@@ -143,11 +147,12 @@ final class AddonCoordinator: NSObject, AddonEmbedderDelegate {
     }
     
     private var menuAddons: [Addon] {
+        let installedAddons = AddonRuntime.shared.installedAddons.filter { !$0.isBuiltIn }
         guard dataSource?.isSelectedAddonTabPrivate == true else {
-            return AddonRuntime.shared.installedAddons
+            return installedAddons
         }
         
-        return AddonRuntime.shared.installedAddons.filter { $0.metaData.allowedInPrivateBrowsing }
+        return installedAddons.filter { $0.metaData.allowedInPrivateBrowsing }
     }
     
     // MARK: - Menu Actions
@@ -222,6 +227,10 @@ final class AddonCoordinator: NSObject, AddonEmbedderDelegate {
     
     @MainActor
     func addonController(_ controller: AddonRuntime, promptFor prompt: AddonPermissionPrompt) async -> AddonPermissionPromptResponse {
+        if let response = AddonImporter.installationResponse(for: prompt) {
+            return response
+        }
+        
         let presentPrompt: @MainActor (AddonPermissionPrompt) async -> AddonPermissionPromptResponse = { prompt in
             await withCheckedContinuation { continuation in
                 guard let delegate = self.delegate else {
@@ -283,6 +292,7 @@ final class AddonCoordinator: NSObject, AddonEmbedderDelegate {
             return
         }
         
+        let isImportingAddon = AddonImporter.importingAddonIDs.contains(addon.id)
         let createTab: () -> Void = { [weak self] in
             self?.createAddonTab(
                 selecting: true,
@@ -291,15 +301,83 @@ final class AddonCoordinator: NSObject, AddonEmbedderDelegate {
             )
         }
         
-        if delegate?.dismissAddonModal(self, completion: createTab) == true {
+        if !isImportingAddon, delegate?.dismissAddonModal(self, completion: createTab) == true {
             return
         }
         
         createTab()
     }
     
-    func addonController(_ controller: AddonRuntime, createNewTabFor addon: Addon, details: AddonCreateTabDetails, newSessionID: String) -> Bool {
+    // MARK: - WebExtension Downloads
+    
+    @MainActor
+    func addonController(_ controller: AddonRuntime, didRequestDownload options: [String: Any?], for addon: Addon) async -> [String: Any]? {
+        _ = controller
         _ = addon
+        guard let downloadItem = await delegate?.confirmAddonDownload(
+            self,
+            options: options
+        ) else {
+            return nil
+        }
+        
+        pendingWebExtensionDownloadsByPath[downloadItem.localFilePath] = downloadItem
+        
+        let startTime = ISO8601DateFormatter().string(from: downloadItem.addedAt)
+        return [
+            "id": downloadItem.id,
+            "filename": downloadItem.fileName,
+            "mime": downloadItem.mimeType ?? "",
+            "startTime": startTime,
+            "state": 0,
+            "paused": false,
+            "canResume": false,
+            "bytesReceived": 0,
+            "totalBytes": -1,
+            "fileSize": -1,
+            "exists": false,
+            "localFilePath": downloadItem.localFilePath,
+        ]
+    }
+    
+    @MainActor
+    func addonController(_ controller: AddonRuntime, didCompleteDownloadAt localFilePath: String, succeeded: Bool) {
+        _ = controller
+        guard let downloadItem = pendingWebExtensionDownloadsByPath.removeValue(forKey: localFilePath) else {
+            return
+        }
+        
+        let fileSize: Int64
+        if succeeded,
+           let attributes = try? FileManager.default.attributesOfItem(atPath: localFilePath),
+           let size = attributes[.size] as? NSNumber {
+            fileSize = size.int64Value
+        } else {
+            fileSize = 0
+        }
+        
+        DownloadStore.shared.completeCapturedDownload(
+            localFilePath: localFilePath,
+            succeeded: succeeded
+        )
+        
+        GeckoRuntime.dispatchEvent(
+            type: "GeckoView:WebExtension:DownloadChanged",
+            message: [
+                "downloadItemId": downloadItem.id,
+                "state": succeeded ? 2 : 1,
+                "error": succeeded ? 0 : 11,
+                "endTime": ISO8601DateFormatter().string(from: Date()),
+                "bytesReceived": fileSize,
+                "totalBytes": fileSize,
+                "fileSize": fileSize,
+                "exists": succeeded,
+            ]
+        )
+    }
+    
+    func addonController(_ controller: AddonRuntime, createNewTabFor addon: Addon, details: AddonCreateTabDetails, newSessionID: String) -> Bool {
+        let isImportingAddon = AddonImporter.importingAddonIDs.contains(addon.id)
         let createTab: () -> Void = { [weak self] in
             self?.createAddonTab(
                 selecting: details.active ?? true,
@@ -309,7 +387,7 @@ final class AddonCoordinator: NSObject, AddonEmbedderDelegate {
             )
         }
         
-        if delegate?.dismissAddonModal(self, completion: createTab) != true {
+        if isImportingAddon || delegate?.dismissAddonModal(self, completion: createTab) != true {
             createTab()
         }
         return true
@@ -398,6 +476,7 @@ final class AddonCoordinator: NSObject, AddonEmbedderDelegate {
     }
     
     private func presentPopup(url: String) {
+        let isPopover = dataSource?.shouldPresentAddonPopupAsPopover == true
         let popupViewController = AddonPopupViewController(
             url: url,
             sessionManager: sessionManager,
@@ -412,12 +491,16 @@ final class AddonCoordinator: NSObject, AddonEmbedderDelegate {
                     return
                 }
                 self.delegate?.restoreAddonTabInteraction(self)
-            }
+            },
+            presentation: isPopover ? .popover : .sheet
         )
-        
-        // Hack: Use .overFullScreen so GeckoView can scroll
-        popupViewController.modalPresentationStyle = .overFullScreen
-        popupViewController.isModalInPresentation = true
+        if !isPopover {
+            if #unavailable(iOS 26.0) {
+                // Hack: Use .overFullScreen so GeckoView can scroll
+                popupViewController.modalPresentationStyle = .overFullScreen
+            }
+            popupViewController.isModalInPresentation = true
+        }
         delegate?.presentAddonViewController(self, popupViewController)
     }
     

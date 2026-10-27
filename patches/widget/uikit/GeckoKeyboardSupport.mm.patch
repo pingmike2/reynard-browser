@@ -1,9 +1,9 @@
 diff --git a/widget/uikit/GeckoKeyboardSupport.mm b/widget/uikit/GeckoKeyboardSupport.mm
 new file mode 100644
-index 000000000000..9e081aa995a4
+index 000000000000..69466b62683d
 --- /dev/null
 +++ b/widget/uikit/GeckoKeyboardSupport.mm
-@@ -0,0 +1,841 @@
+@@ -0,0 +1,1098 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,10 +12,13 @@ index 000000000000..9e081aa995a4
 + * https://github.com/minh-ton/reynard-browser in Feb 2026. */
 +
 +#include <dlfcn.h>
++#include <objc/message.h>
++#include <objc/runtime.h>
 +
 +#include "GeckoKeyboardSupport.h"
 +
 +#include "GeckoEditableSupport.h"
++#include "GeckoViewSwiftSupport.h"
 +#include "TextInputHandler.h"
 +#include "mozilla/BasicEvents.h"
 +#include "mozilla/MacStringHelpers.h"
@@ -25,9 +28,51 @@ index 000000000000..9e081aa995a4
 +#include "mozilla/WidgetUtils.h"
 +#include "nsWindow.h"
 +
++@interface UIKeyboardImpl : NSObject
+++ (instancetype)sharedInstance;
++- (BOOL)isInHardwareKeyboardMode;
++@end
++
++@interface UIEvent (KeyCommands)
++- (NSString*)_modifiedInput;
++- (NSString*)_unmodifiedInput;
++- (UIKeyModifierFlags)_modifierFlags;
++- (WebEventFlags)_gsModifierFlags;
++- (BOOL)_isKeyDown;
++- (BOOL)_isARepeat;
++- (uint16_t)_keyCode;
++- (WebKeyboardInputFlags)_inputFlags;
++- (NSString*)_hint;
++@end
++
 +namespace mozilla::widget {
 +
++Modifiers GeckoModifiersForUIKitModifiers(UIKeyModifierFlags aModifiers) {
++  Modifiers modifiers = MODIFIER_NONE;
++  if (aModifiers & UIKeyModifierAlphaShift) {
++    modifiers |= MODIFIER_CAPSLOCK;
++  }
++  if (aModifiers & UIKeyModifierShift) {
++    modifiers |= MODIFIER_SHIFT;
++  }
++  if (aModifiers & UIKeyModifierControl) {
++    modifiers |= MODIFIER_CONTROL;
++  }
++  if (aModifiers & UIKeyModifierAlternate) {
++    modifiers |= MODIFIER_ALT;
++  }
++  if (aModifiers & UIKeyModifierCommand) {
++    modifiers |= MODIFIER_META;
++  }
++  if (aModifiers & UIKeyModifierNumericPad) {
++    modifiers |= MODIFIER_NUMLOCK;
++  }
++  return modifiers;
++}
++
 +namespace {
++
++constexpr CFTimeInterval kKeyCommandTimeout = 10.0;
 +
 +enum : uint16_t {
 +  kVKBack = 0x08,
@@ -112,6 +157,20 @@ index 000000000000..9e081aa995a4
 +    modifiers |= MODIFIER_META;
 +  }
 +  return modifiers;
++}
++
++static WebEventFlags CurrentWebEventFlags(WebEvent* aEvent) {
++  WebEventFlags modifierFlags = aEvent.modifierFlags;
++  if (aEvent.type == WebEventKeyDown) {
++    using ModifierFlagsFunction = WebEventFlags (*)(id, SEL);
++    static ModifierFlagsFunction modifierFlagsFunction =
++        reinterpret_cast<ModifierFlagsFunction>(objc_msgSend);
++    Class webEventClass = objc_getClass("WebEvent");
++    MOZ_RELEASE_ASSERT(webEventClass);
++    modifierFlags |= modifierFlagsFunction(reinterpret_cast<id>(webEventClass),
++                                           sel_registerName("modifierFlags"));
++  }
++  return modifierFlags;
 +}
 +
 +static TimeStamp GeckoTimeStampForWebEvent(CFTimeInterval aTimestamp) {
@@ -363,6 +422,27 @@ index 000000000000..9e081aa995a4
 +  return keyRepeatInterval();
 +}
 +
++static uint16_t NativeKeyCodeForHIDUsage(NSUInteger aUsage) {
++  enum : NSUInteger {
++    kHIDUsageRightArrow = 0x4F,
++    kHIDUsageLeftArrow = 0x50,
++    kHIDUsageDownArrow = 0x51,
++    kHIDUsageUpArrow = 0x52,
++  };
++  switch (aUsage) {
++    case kHIDUsageRightArrow:
++      return kVKRight;
++    case kHIDUsageLeftArrow:
++      return kVKLeft;
++    case kHIDUsageDownArrow:
++      return kVKDown;
++    case kHIDUsageUpArrow:
++      return kVKUp;
++    default:
++      return 0;
++  }
++}
++
 +}  // namespace
 +
 +struct GeckoKeyboardSupport::HeldKey {
@@ -375,9 +455,105 @@ index 000000000000..9e081aa995a4
 +};
 +
 +GeckoKeyboardSupport::GeckoKeyboardSupport(TextInputHandler* aHandler)
-+    : mHandler(aHandler) {}
++    : mHandler(aHandler),
++      mPendingKeyCommands([[NSMapTable strongToStrongObjectsMapTable] retain]) {
++}
 +
-+GeckoKeyboardSupport::~GeckoKeyboardSupport() { StopKeyRepeat(); }
++GeckoKeyboardSupport::~GeckoKeyboardSupport() {
++  StopKeyRepeat();
++  [mPendingKeyCommands release];
++}
++
++void GeckoKeyboardSupport::SetKeyCommandDelegate(
++    id<GeckoViewKeyCommandDelegate> aDelegate) {
++  mKeyCommandDelegate = aDelegate;
++  [mPendingKeyCommands removeAllObjects];
++}
++
++bool GeckoKeyboardSupport::HandleKeyCommand(UIEvent* aEvent) {
++  if (Destroyed()) {
++    return false;
++  }
++
++  RefPtr<TextInputHandler> kungFuDeathGrip(mHandler);
++  const uint16_t keyCode = [aEvent _keyCode];
++  if (![aEvent _isKeyDown]) {
++    if (!mShortcutKeys.RemoveElement(keyCode)) {
++      return false;
++    }
++
++    mCurrentModifiers =
++        GeckoModifiersForWebEventFlags([aEvent _gsModifierFlags]);
++    ReleasePhysicalKey(keyCode);
++    return true;
++  }
++
++  NSString* characters = [aEvent _modifiedInput] ?: @"";
++  NSString* charactersIgnoringModifiers = [aEvent _unmodifiedInput] ?: @"";
++  const UIKeyModifierFlags modifiers = [aEvent _modifierFlags];
++  UIKeyCommand* command = [mKeyCommandDelegate keyCommandForInput:characters
++                                                    modifierFlags:modifiers];
++  if (!command) {
++    command =
++        [mKeyCommandDelegate keyCommandForInput:charactersIgnoringModifiers
++                                  modifierFlags:modifiers];
++  }
++  if (!command) {
++    return false;
++  }
++
++  if ([aEvent _isARepeat]) {
++    return true;
++  }
++
++  StopKeyRepeat();
++  mShortcutKeys.AppendElement(keyCode);
++  NSNumber* expiration = [mPendingKeyCommands objectForKey:command];
++  const bool appCommandPending =
++      expiration && expiration.doubleValue > CFAbsoluteTimeGetCurrent();
++  [mPendingKeyCommands removeObjectForKey:command];
++
++  if ([mKeyCommandDelegate shouldDispatchKeyCommandToContent:command] &&
++      !appCommandPending) {
++    Class eventClass = NSClassFromString(@"WebEvent");
++    MOZ_RELEASE_ASSERT(eventClass);
++    WebEvent* event = [[eventClass alloc]
++               initWithKeyEventType:WebEventKeyDown
++                          timeStamp:aEvent.timestamp
++                         characters:characters
++        charactersIgnoringModifiers:charactersIgnoringModifiers
++                          modifiers:[aEvent _gsModifierFlags]
++                        isRepeating:NO
++                          withFlags:[aEvent _inputFlags]
++               withInputManagerHint:[aEvent _hint]
++                            keyCode:keyCode
++                           isTabKey:[characters isEqualToString:@"\t"]];
++    mCurrentModifiers = GeckoModifiersForWebEventFlags(event.modifierFlags);
++    RememberKeyDown(event);
++    bool preventedByContent = false;
++    Maybe<Command> editCommand;
++    const bool dispatched = mHandler->DispatchPhysicalKeyDown(
++        event, false, false, editCommand, &preventedByContent);
++    [event release];
++    if (!dispatched || Destroyed()) {
++      return true;
++    }
++
++    if (preventedByContent) {
++      [mPendingKeyCommands
++          setObject:@(CFAbsoluteTimeGetCurrent() + kKeyCommandTimeout)
++             forKey:command];
++      [mKeyCommandDelegate contentDidHandleKeyCommand:command];
++      return true;
++    }
++  }
++
++  [[UIApplication sharedApplication] sendAction:command.action
++                                             to:nil
++                                           from:command
++                                       forEvent:aEvent];
++  return true;
++}
 +
 +void GeckoKeyboardSupport::InitKeyEvent(WebEvent* aNativeEvent,
 +                                        WidgetKeyboardEvent& aEvent,
@@ -385,8 +561,7 @@ index 000000000000..9e081aa995a4
 +                                        bool aProcessedByIME,
 +                                        const nsAString* aInsertString,
 +                                        bool aForceRepeat) const {
-+  aEvent.mModifiers =
-+      GeckoModifiersForWebEventFlags(aNativeEvent.modifierFlags);
++  aEvent.mModifiers = mCurrentModifiers;
 +  aEvent.mCodeNameIndex = ComputeCodeNameIndex(aNativeEvent.keyCode);
 +  aEvent.mLocation =
 +      WidgetKeyboardEvent::ComputeLocationFromCodeValue(aEvent.mCodeNameIndex);
@@ -466,7 +641,8 @@ index 000000000000..9e081aa995a4
 +  });
 +}
 +
-+void GeckoKeyboardSupport::StartKeyRepeat(WebEvent* aEvent) {
++void GeckoKeyboardSupport::StartKeyRepeat(WebEvent* aEvent,
++                                          const Maybe<Command>& aCommand) {
 +  if (mKeyRepeatTimer || !IsRepeatableSpecialKey(aEvent)) {
 +    return;
 +  }
@@ -477,6 +653,8 @@ index 000000000000..9e081aa995a4
 +  }
 +
 +  mRepeatingEvent = [aEvent retain];
++  mRepeatingCommand = aCommand;
++  mRepeatingModifiers = mCurrentModifiers;
 +  CFRunLoopTimerContext context = {0, this, nullptr, nullptr, nullptr};
 +  mKeyRepeatTimer = CFRunLoopTimerCreate(
 +      kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + interval, interval, 0,
@@ -492,6 +670,7 @@ index 000000000000..9e081aa995a4
 +  }
 +  [mRepeatingEvent release];
 +  mRepeatingEvent = nil;
++  mRepeatingCommand.reset();
 +}
 +
 +void GeckoKeyboardSupport::KeyRepeatTimerFired(CFRunLoopTimerRef, void* aInfo) {
@@ -500,6 +679,12 @@ index 000000000000..9e081aa995a4
 +
 +void GeckoKeyboardSupport::RepeatKey() {
 +  if (Destroyed() || !mRepeatingEvent) {
++    StopKeyRepeat();
++    return;
++  }
++
++  // If the modifiers change, let the next key event choose the new command.
++  if (mCurrentModifiers != mRepeatingModifiers) {
 +    StopKeyRepeat();
 +    return;
 +  }
@@ -517,7 +702,8 @@ index 000000000000..9e081aa995a4
 +  }
 +
 +  RefPtr<TextInputHandler> kungFuDeathGrip(mHandler);
-+  mHandler->DispatchPhysicalKeyDown(mRepeatingEvent, true, false);
++  Maybe<Command> command = mRepeatingCommand;
++  mHandler->DispatchPhysicalKeyDown(mRepeatingEvent, true, false, command);
 +}
 +
 +bool GeckoKeyboardSupport::DispatchKeyUp(WebEvent* aEvent) {
@@ -560,8 +746,25 @@ index 000000000000..9e081aa995a4
 +                                                      status);
 +}
 +
++void GeckoKeyboardSupport::ReleasePhysicalKey(uint16_t aNativeKeyCode) {
++  for (size_t index = 0; index < mHeldKeys.Length(); ++index) {
++    if (mHeldKeys[index]->mNativeKeyCode != aNativeKeyCode) {
++      continue;
++    }
++
++    if (mRepeatingEvent && mRepeatingEvent.keyCode == aNativeKeyCode) {
++      StopKeyRepeat();
++    }
++    UniquePtr<HeldKey> heldKey = std::move(mHeldKeys[index]);
++    mHeldKeys.RemoveElementAt(index);
++    DispatchHeldKeyUp(*heldKey, mCurrentModifiers);
++    return;
++  }
++}
++
 +void GeckoKeyboardSupport::ReleasePhysicalKeys() {
 +  StopKeyRepeat();
++  mShortcutKeys.Clear();
 +  nsTArray<UniquePtr<HeldKey>> heldKeys;
 +  heldKeys.SwapElements(mHeldKeys);
 +  Modifiers modifiers = mCurrentModifiers;
@@ -606,8 +809,14 @@ index 000000000000..9e081aa995a4
 +  }
 +
 +  RefPtr<TextInputHandler> kungFuDeathGrip(mHandler);
-+  mCurrentModifiers = GeckoModifiersForWebEventFlags(aEvent.modifierFlags);
++  const Modifiers eventModifiers =
++      GeckoModifiersForWebEventFlags(CurrentWebEventFlags(aEvent));
++  mCurrentModifiers = eventModifiers | (mCurrentModifiers &
++                                        (MODIFIER_SHIFT | MODIFIER_CAPSLOCK));
 +  if (aEvent.type == WebEventKeyUp) {
++    if (ComputeSpecialKeyNameIndex(aEvent.keyCode) == KEY_NAME_INDEX_Shift) {
++      mCurrentModifiers &= ~MODIFIER_SHIFT;
++    }
 +    if (mRepeatingEvent && mRepeatingEvent.keyCode == aEvent.keyCode) {
 +      StopKeyRepeat();
 +    }
@@ -633,13 +842,18 @@ index 000000000000..9e081aa995a4
 +    StopKeyRepeat();
 +  } else if (aEvent.isKeyRepeating && mRepeatingEvent &&
 +             mRepeatingEvent.keyCode == aEvent.keyCode) {
-+    return true;
++    if (mCurrentModifiers == mRepeatingModifiers) {
++      return true;
++    }
++    StopKeyRepeat();
 +  }
 +
 +  RememberKeyDown(aEvent);
-+  bool handled = mHandler->DispatchPhysicalKeyDown(aEvent, false, true);
++  Maybe<Command> command;
++  bool handled =
++      mHandler->DispatchPhysicalKeyDown(aEvent, false, true, command);
 +  if (aEvent.isKeyRepeating && handled && !Destroyed()) {
-+    StartKeyRepeat(aEvent);
++    StartKeyRepeat(aEvent, command);
 +  }
 +  return handled;
 +}
@@ -659,27 +873,7 @@ index 000000000000..9e081aa995a4
 +       CODE_NAME_INDEX_CapsLock},
 +  };
 +
-+  auto geckoModifiers = [](UIKeyModifierFlags aFlags) {
-+    Modifiers modifiers = MODIFIER_NONE;
-+    if (aFlags & UIKeyModifierAlphaShift) {
-+      modifiers |= MODIFIER_CAPSLOCK;
-+    }
-+    if (aFlags & UIKeyModifierShift) {
-+      modifiers |= MODIFIER_SHIFT;
-+    }
-+    if (aFlags & UIKeyModifierControl) {
-+      modifiers |= MODIFIER_CONTROL;
-+    }
-+    if (aFlags & UIKeyModifierAlternate) {
-+      modifiers |= MODIFIER_ALT;
-+    }
-+    if (aFlags & UIKeyModifierCommand) {
-+      modifiers |= MODIFIER_META;
-+    }
-+    return modifiers;
-+  };
-+
-+  mCurrentModifiers = geckoModifiers(aNewFlags);
++  mCurrentModifiers = GeckoModifiersForUIKitModifiers(aNewFlags);
 +  for (const auto& transition : transitions) {
 +    bool wasDown = aOldFlags & transition.mFlag;
 +    bool isDown = aNewFlags & transition.mFlag;
@@ -752,6 +946,7 @@ index 000000000000..9e081aa995a4
 +@end
 +
 +@interface ChildView (Keyboard)
++- (BOOL)_disableAutomaticKeyboardUI;
 +- (BOOL)_requiresKeyboardWhenFirstResponder;
 +- (BOOL)_requiresKeyboardResetOnReload;
 +- (void)_handleKeyUIEvent:(UIEvent*)event;
@@ -762,11 +957,21 @@ index 000000000000..9e081aa995a4
 +        (void (^)(WebEvent* event, BOOL wasHandled))completionHandler;
 +- (void)modifierFlagsDidChangeFrom:(UIKeyModifierFlags)oldFlags
 +                                to:(UIKeyModifierFlags)newFlags;
++- (void)pressesEnded:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event;
 +- (void)pressesCancelled:(NSSet<UIPress*>*)presses
 +               withEvent:(UIPressesEvent*)event;
 +@end
 +
 +@implementation ChildView (Keyboard)
++
++- (BOOL)_disableAutomaticKeyboardUI {
++  if (![self isFirstResponder] || !mGeckoChild || mGeckoChild->Destroyed()) {
++    return NO;
++  }
++
++  // Keep page shortcuts working without showing keyboard UI outside inputs.
++  return mGeckoChild->IsVirtualKeyboardDisabled();
++}
 +
 +- (BOOL)_requiresKeyboardWhenFirstResponder {
 +  if (!mGeckoChild || mGeckoChild->Destroyed()) {
@@ -791,11 +996,29 @@ index 000000000000..9e081aa995a4
 +    mEditable.mSeenHardwareKeyDownInNonEditableContent = YES;
 +    [self reloadInputViews];
 +  }
++
++  if ([self isFirstResponder] && isHardwareKeyboardEvent && mGeckoChild &&
++      !mGeckoChild->Destroyed()) {
++    if (mozilla::widget::TextInputHandler* handler =
++            mGeckoChild->GetTextInputHandler()) {
++      if (handler->HandleKeyCommand(event)) {
++        return;
++      }
++    }
++  }
++
 +  [super _handleKeyUIEvent:event];
 +}
 +
 +- (BOOL)requiresKeyEvents {
-+  return mGeckoChild && !mGeckoChild->Destroyed();
++  if (!mGeckoChild || mGeckoChild->Destroyed()) {
++    return NO;
++  }
++
++  Class keyboardClass = NSClassFromString(@"UIKeyboardImpl");
++  MOZ_RELEASE_ASSERT(keyboardClass);
++  UIKeyboardImpl* keyboard = [keyboardClass sharedInstance];
++  return [keyboard isInHardwareKeyboardMode];
 +}
 +
 +- (void)handleKeyWebEvent:(WebEvent*)event {
@@ -830,6 +1053,40 @@ index 000000000000..9e081aa995a4
 +  if (mozilla::widget::TextInputHandler* handler =
 +          mGeckoChild->GetTextInputHandler()) {
 +    handler->HandleModifierFlagsChanged(oldFlags, newFlags);
++  }
++}
++
++- (void)pressesEnded:(NSSet<UIPress*>*)presses
++           withEvent:(UIPressesEvent*)event {
++  [super pressesEnded:presses withEvent:event];
++
++  if (!mGeckoChild || mGeckoChild->Destroyed()) {
++    return;
++  }
++  mozilla::widget::TextInputHandler* handler =
++      mGeckoChild->GetTextInputHandler();
++  if (!handler) {
++    return;
++  }
++
++  SEL keySelector = sel_registerName("key");
++  SEL keyCodeSelector = sel_registerName("keyCode");
++  using KeyFunction = id (*)(id, SEL);
++  using KeyCodeFunction = NSUInteger (*)(id, SEL);
++  for (UIPress* press in presses) {
++    if (![press respondsToSelector:keySelector]) {
++      continue;
++    }
++    id key = reinterpret_cast<KeyFunction>(objc_msgSend)(press, keySelector);
++    if (![key respondsToSelector:keyCodeSelector]) {
++      continue;
++    }
++    NSUInteger usage =
++        reinterpret_cast<KeyCodeFunction>(objc_msgSend)(key, keyCodeSelector);
++    uint16_t nativeKeyCode = mozilla::widget::NativeKeyCodeForHIDUsage(usage);
++    if (nativeKeyCode) {
++      handler->ReleasePhysicalKey(nativeKeyCode);
++    }
 +  }
 +}
 +

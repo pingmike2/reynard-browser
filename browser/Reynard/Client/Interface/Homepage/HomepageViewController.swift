@@ -9,7 +9,11 @@ import UIKit
 
 protocol HomepageViewControllerDelegate: AnyObject {
     func homepageViewController(_ controller: HomepageViewController, didRequestOpenURL url: URL, disposition: TabOpenDisposition)
-    func homepageViewController(_ controller: HomepageViewController, didRequestShareURL url: URL)
+    func homepageViewController(
+        _ controller: HomepageViewController,
+        didRequestShareURL url: URL,
+        sourceView: UIView
+    )
     func homepageViewController(_ controller: HomepageViewController, didRequestHideFromSuggestions siteID: Int64)
     func homepageViewController(_ controller: HomepageViewController, didSelectRecentlyClosedTab id: UUID)
     func homepageViewControllerDidSelectSettings(_ controller: HomepageViewController)
@@ -27,6 +31,13 @@ final class HomepageViewController: UINavigationController {
     private var showsBackground = false
     
     // MARK: - Lifecycle
+    
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        if #available(iOS 26.0, *) {
+            return .default
+        }
+        return super.preferredStatusBarStyle
+    }
     
     init(bookmarkStore: BookmarkStore = .shared, isPrivateBrowsing: Bool = false) {
         self.bookmarkStore = bookmarkStore
@@ -65,6 +76,9 @@ final class HomepageViewController: UINavigationController {
         self.contentMode = contentMode
         viewControllers.forEach { viewController in
             (viewController as? HomepageRootViewController)?.setContentMode(contentMode)
+        }
+        if isViewLoaded {
+            updateNavigationBarAppearance()
         }
     }
     
@@ -109,8 +123,20 @@ final class HomepageViewController: UINavigationController {
     private func configureAppearance() {
         updateBackgroundColor()
         delegate = self
-        navigationBar.isTranslucent = false
+        updateNavigationBarAppearance()
+        navigationBar.isTranslucent = true
         setNavigationBarHidden(true, animated: false)
+    }
+    
+    private func updateNavigationBarAppearance() {
+        let foregroundColor = HomepageWallpaper.foregroundColor(for: contentMode)
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithTransparentBackground()
+        appearance.titleTextAttributes = [.foregroundColor: foregroundColor]
+        navigationBar.standardAppearance = appearance
+        navigationBar.scrollEdgeAppearance = appearance
+        navigationBar.compactAppearance = appearance
+        navigationBar.tintColor = foregroundColor
     }
     
     private func updateBackgroundColor() {
@@ -120,6 +146,7 @@ final class HomepageViewController: UINavigationController {
 
 extension HomepageViewController: UINavigationControllerDelegate {
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
+        updateNavigationBarAppearance()
         setNavigationBarHidden(viewController === rootViewController, animated: false)
     }
 }
@@ -129,8 +156,16 @@ extension HomepageViewController: HomepageRootViewControllerDelegate {
         homepageDelegate?.homepageViewController(self, didRequestOpenURL: url, disposition: disposition)
     }
     
-    func homepageRootViewController(_ controller: HomepageRootViewController, didRequestShareURL url: URL) {
-        homepageDelegate?.homepageViewController(self, didRequestShareURL: url)
+    func homepageRootViewController(
+        _ controller: HomepageRootViewController,
+        didRequestShareURL url: URL,
+        sourceView: UIView
+    ) {
+        homepageDelegate?.homepageViewController(
+            self,
+            didRequestShareURL: url,
+            sourceView: sourceView
+        )
     }
     
     func homepageRootViewController(_ controller: HomepageRootViewController, didRequestHideFromSuggestions siteID: Int64) {

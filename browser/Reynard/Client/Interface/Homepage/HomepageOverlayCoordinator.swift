@@ -12,7 +12,6 @@ protocol HomepageOverlayCoordinatorDelegate: AnyObject {
     var homepageGridWidth: HomepageGridWidth { get }
     var homepageSelectedTab: Tab? { get }
     var isHomepageTabOverviewPresented: Bool { get }
-    var isHomepageTabOverviewTransitionRunning: Bool { get }
     var isHomepageShowingFullscreenMedia: Bool { get }
     var homepageChrome: BrowserChrome { get }
     var homepageContentView: ContentView { get }
@@ -20,7 +19,7 @@ protocol HomepageOverlayCoordinatorDelegate: AnyObject {
     
     // Homepage section actions
     func openURLFromHomepage(_ url: URL, disposition: TabOpenDisposition)
-    func shareURLFromHomepage(_ url: URL)
+    func shareURLFromHomepage(_ url: URL, sourceView: UIView)
     func openSettingsFromHomepage()
     func restoreClosedTabFromHomepage(id: UUID) -> Bool
     
@@ -64,7 +63,19 @@ final class HomepageOverlayCoordinator {
     
     // MARK: - State
     
+    func isHomepageTab(_ tab: Tab) -> Bool {
+        guard tab.state.loadError == nil,
+              showsHomepageForBlankTabs || tab.state.showsStartupHomepage else {
+            return false
+        }
+        
+        return isBlankTab(tab)
+    }
+    
     func updatePresentation(animated: Bool) {
+        let showsHomepage = delegate?.homepageSelectedTab.map(isHomepageTab) == true
+        delegate?.homepageContentView.setWebVisibility(showsHomepage ? .hidden : .visible)
+        
         guard let presentation = homepagePresentation else {
             dismiss(animated: animated)
             return
@@ -72,18 +83,6 @@ final class HomepageOverlayCoordinator {
         
         toolbarController.lock(for: .homepageOverlay)
         presentHomepage(presentation, animated: animated)
-    }
-    
-    func updatePresentedLayout() {
-        guard let presentation = homepagePresentation,
-              overlayCoordinator.contains(.homepage, on: presentation.host) else {
-            return
-        }
-        
-        homepageViewController.setPrivateBrowsing(isPrivateBrowsing)
-        homepageViewController.setContentMode(presentation.contentMode)
-        homepageViewController.setShowsBackground(presentation.showsBackground)
-        configureOverlay(for: presentation)
     }
     
     func updateVisibleContentInsets() {
@@ -99,8 +98,7 @@ final class HomepageOverlayCoordinator {
     
     func tabOverviewWillPresent() {
         if let tab = delegate?.homepageSelectedTab,
-           (showsHomepageForBlankTabs || tab.state.showsStartupHomepage),
-           isBlankTab(tab) {
+           isHomepageTab(tab) {
             return
         }
         
@@ -114,10 +112,6 @@ final class HomepageOverlayCoordinator {
     }
     
     // MARK: - Thumbnails
-    
-    func needsHomepageThumbnail(for tab: Tab) -> Bool {
-        return (showsHomepageForBlankTabs || tab.state.showsStartupHomepage) && isBlankTab(tab)
-    }
     
     func prepareHomepageForNewTab(mode: TabMode) {
         guard let delegate,
@@ -143,15 +137,13 @@ final class HomepageOverlayCoordinator {
             visibleRect: geometry.visibleRect,
             contentMode: embeddedContentMode(layout: delegate.homepageLayout),
             isPrivateBrowsing: tab.isPrivate,
-            capturesWindow: !delegate.isHomepageTabOverviewPresented &&
-            !delegate.isHomepageTabOverviewTransitionRunning,
             completion: completion
         )
     }
     
     func previewImage(for tab: Tab) -> UIImage? {
         guard let delegate,
-              needsHomepageThumbnail(for: tab),
+              isHomepageTab(tab),
               let geometry = delegate.homepageContentView.thumbnailCaptureGeometry else {
             return nil
         }
@@ -160,8 +152,7 @@ final class HomepageOverlayCoordinator {
             size: geometry.size,
             visibleRect: geometry.visibleRect,
             contentMode: embeddedContentMode(layout: delegate.homepageLayout),
-            isPrivateBrowsing: tab.isPrivate,
-            capturesWindow: false
+            isPrivateBrowsing: tab.isPrivate
         )
     }
     
@@ -223,6 +214,8 @@ final class HomepageOverlayCoordinator {
         }
         
         guard presentation.host == .detached else {
+            delegate.homepageContentView.superview?.layoutIfNeeded()
+            homepageViewController.setVisibleContentInsets(visibleContentInsets(in: delegate.homepageContentView))
             return
         }
         
@@ -251,8 +244,7 @@ final class HomepageOverlayCoordinator {
         }
         
         if let tab = delegate.homepageSelectedTab,
-           (showsHomepageForBlankTabs || tab.state.showsStartupHomepage),
-           isBlankTab(tab) {
+           isHomepageTab(tab) {
             return HomepagePresentation(
                 host: .embedded,
                 contentMode: embeddedContentMode(layout: delegate.homepageLayout),
@@ -420,8 +412,15 @@ extension HomepageOverlayCoordinator: HomepageViewControllerDelegate {
         dismiss(animated: true)
     }
     
-    func homepageViewController(_ controller: HomepageViewController, didRequestShareURL url: URL) {
-        delegate?.shareURLFromHomepage(url)
+    func homepageViewController(
+        _ controller: HomepageViewController,
+        didRequestShareURL url: URL,
+        sourceView: UIView
+    ) {
+        delegate?.shareURLFromHomepage(
+            url,
+            sourceView: sourceView
+        )
     }
     
     func homepageViewController(_ controller: HomepageViewController, didRequestHideFromSuggestions siteID: Int64) {

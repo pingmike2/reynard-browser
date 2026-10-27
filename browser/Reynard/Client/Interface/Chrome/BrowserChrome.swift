@@ -7,11 +7,19 @@
 
 import UIKit
 
-final class BrowserChrome: UIView {
+final class BrowserChrome: UIView, UIGestureRecognizerDelegate {
     private enum UX {
         static let overlayTopSpacing: CGFloat = 12
         static let actionBarSpacing: CGFloat = 0
-        static let actionBarAnimationDuration: TimeInterval = 0.12
+        static let actionBarFlyOutDuration: TimeInterval = 0.18
+        static var actionBarFadeDuration: TimeInterval {
+            if #available(iOS 26.0, *) { return 0.05 }
+            return 0.12
+        }
+        static let minimizedToolbarContentHeight: CGFloat = 24
+        static let minimizedTextFontSize: CGFloat = 13
+        static let textShrinkTravelFraction: CGFloat = 0.75
+        static let toolbarContentFadeDuration: TimeInterval = 0.12
     }
     
     enum PresentationState {
@@ -64,15 +72,29 @@ final class BrowserChrome: UIView {
     var onFindInPage: ((_ query: String?, _ backwards: Bool) async -> (current: Int, total: Int)?)?
     var onClearFindInPage: (() -> Void)?
     var onFindInPageVisibilityChanged: ((Bool) -> Void)?
+    var onKeyboardDismissal: (() -> Void)?
+    var onToolbarExpansionRequested: (() -> Void)?
     
-    private let addressBar: AddressBar = {
+    let addressBar: AddressBar = {
         let view = AddressBar()
         view.translatesAutoresizingMaskIntoConstraints = false
         return view
     }()
     
+    let tabBar = TabBar()
     private let topToolbar: TopToolbar
     private let bottomToolbar: BottomToolbar
+    
+    private let toolbarTextLabel: UILabel = {
+        let label = UILabel()
+        label.textAlignment = .left
+        label.textColor = .label
+        label.lineBreakMode = .byTruncatingTail
+        label.isHidden = true
+        label.isAccessibilityElement = false
+        return label
+    }()
+    
     private let overlayDismissView: UIView = {
         let view = UIView()
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -80,10 +102,17 @@ final class BrowserChrome: UIView {
         view.isHidden = true
         return view
     }()
+    
     private let overlayContentView = ChromeOverlayContentView()
     private let actionBar = ActionBar()
+    private lazy var pageZoomDismissView: UIControl = {
+        let view = UIControl()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.isHidden = true
+        view.addTarget(self, action: #selector(pageZoomOutsideTapped), for: .touchUpInside)
+        return view
+    }()
     
-    private var bottomConstraint: NSLayoutConstraint!
     private var overlayWidthConstraint: NSLayoutConstraint!
     private var overlayHeightConstraint: NSLayoutConstraint!
     private var overlayTopConstraint: NSLayoutConstraint?
@@ -92,8 +121,13 @@ final class BrowserChrome: UIView {
     private var actionBarBottomConstraint: NSLayoutConstraint?
     private var actionBarKeyboardBottomConstraint: NSLayoutConstraint?
     private var actionBarDockOffset: CGFloat = 0
+    private var modernActionBarDismissalID: UUID?
     
     private var state: State?
+    private var toolbarCollapseProgress: CGFloat = 0
+    private var toolbarTextCenterProgress: CGFloat = 0
+    private var isToolbarContentHidden = false
+    private var toolbarContentAlphas: (top: CGFloat, bottom: CGFloat) = (1, 1)
     
     // MARK: - Lifecycle
     
@@ -113,6 +147,15 @@ final class BrowserChrome: UIView {
     }
     
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if !pageZoomDismissView.isHidden {
+            return super.hitTest(point, with: event)
+        }
+        if let hitView = bottomToolbar.hitTestAddressBar(
+            at: bottomToolbar.convert(point, from: self),
+            with: event
+        ) {
+            return hitView
+        }
         let hitView = super.hitTest(point, with: event)
         return hitView === self ? nil : hitView
     }
@@ -128,6 +171,10 @@ final class BrowserChrome: UIView {
         return topToolbar.bottomAnchor
     }
     
+    var tabBarBottomAnchor: NSLayoutYAxisAnchor {
+        return tabBar.bottomAnchor
+    }
+    
     var bottomToolbarTopAnchor: NSLayoutYAxisAnchor {
         return bottomToolbar.topAnchor
     }
@@ -136,18 +183,34 @@ final class BrowserChrome: UIView {
         return addressBar.bottomAnchor
     }
     
+    func minimizedToolbarHeight(for mode: BrowserChromeMode) -> CGFloat {
+        let inset = mode == .phone ? safeAreaInsets.bottom : (state?.topInset ?? safeAreaInsets.top)
+        return inset + UX.minimizedToolbarContentHeight
+    }
+    
     func addressBarFrame(in view: UIView) -> CGRect {
         return addressBar.convert(addressBar.bounds, to: view)
     }
     
     func sharePopoverSourceView() -> UIView {
-        guard let state else { return bottomToolbar }
-        return state.mode == .phone ? bottomToolbar : topToolbar
+        guard let state else { return bottomToolbar.sharePopoverSourceView() }
+        return state.mode == .phone
+        ? bottomToolbar.sharePopoverSourceView()
+        : topToolbar.sharePopoverSourceView()
+    }
+    
+    var addressBarButton: AddressBarButton {
+        return addressBar.addressBarButton
     }
     
     // MARK: - Layout
     
     func apply(state: State) {
+        if self.state?.mode != state.mode {
+            toolbarCollapseProgress = 0
+            toolbarTextCenterProgress = 0
+        }
+        
         self.state = state
         addressBar.updateLayout(position: state.position, chromeMode: state.mode)
         attachAddressBar(for: state.mode)
@@ -158,6 +221,7 @@ final class BrowserChrome: UIView {
         updateOverlayHeight()
         let canUseActionBar = state.presentation == .browsing && state.search == .inactive
         actionBar.isUserInteractionEnabled = canUseActionBar
+        
         if !canUseActionBar {
             dismissActionBar(animated: false)
         }
@@ -189,12 +253,12 @@ final class BrowserChrome: UIView {
     }
     
     func dockAddressBar(offset: CGFloat) {
-        bottomConstraint.constant = offset
-        bottomToolbar.setVerticalOffset(offset)
+        bottomToolbar.setAddressBarDockOffset(offset)
     }
     
     func dockActionBar(offset: CGFloat) {
         actionBarDockOffset = offset
+        actionBar.isKeyboardDocked = offset != 0
         if offset == 0 {
             actionBarKeyboardBottomConstraint?.isActive = false
             actionBarKeyboardBottomConstraint = nil
@@ -222,14 +286,22 @@ final class BrowserChrome: UIView {
     
     // MARK: - Action Bar
     
+    var isShowingKeyboardDismissal: Bool {
+        return actionBar.isShowingKeyboardDismissal
+    }
+    
     func showActionBar(_ item: ActionBar.Item, animated: Bool) {
         guard state?.presentation == .browsing,
               state?.search == .inactive else {
             return
         }
         
+        modernActionBarDismissalID = nil
         let wasShowingFindInPage = actionBar.isShowingFindInPage
         actionBar.setItem(item)
+        if #available(iOS 26.0, *) {
+            pageZoomDismissView.isHidden = item != .pageZoom
+        }
         if wasShowingFindInPage != actionBar.isShowingFindInPage {
             onFindInPageVisibilityChanged?(actionBar.isShowingFindInPage)
         }
@@ -237,13 +309,61 @@ final class BrowserChrome: UIView {
     }
     
     func dismissActionBar(animated: Bool) {
+        pageZoomDismissView.isHidden = true
         guard !actionBar.isHidden else { return }
+        if #available(iOS 26.0, *), animated,
+           actionBar.item == .pageZoom || actionBar.isShowingFindInPage {
+            guard modernActionBarDismissalID == nil else { return }
+            
+            let dismissalID = UUID()
+            modernActionBarDismissalID = dismissalID
+            let wasShowingFindInPage = actionBar.isShowingFindInPage
+            let shouldRestoreToolbarAtStart = wasShowingFindInPage && !actionBar.isKeyboardDocked
+            let shouldSlide = (actionBar.item == .pageZoom || actionBarDockOffset == 0)
+            && !UIAccessibility.isReduceMotionEnabled
+            
+            if shouldRestoreToolbarAtStart {
+                onFindInPageVisibilityChanged?(false)
+            }
+            
+            let screenBottom = window.map { convert($0.bounds, from: $0).maxY } ?? bounds.maxY
+            let translationY = shouldSlide
+            ? max(0, screenBottom - actionBar.frame.minY)
+            : 0
+            let animationOptions: UIView.AnimationOptions = shouldRestoreToolbarAtStart
+            ? [.beginFromCurrentState, .curveEaseOut]
+            : [.beginFromCurrentState, .curveEaseIn]
+            
+            UIView.animate(
+                withDuration: shouldSlide ? UX.actionBarFlyOutDuration : UX.actionBarFadeDuration,
+                delay: 0,
+                options: animationOptions
+            ) {
+                self.actionBar.dismissModernContent(
+                    translationY: translationY,
+                    fadeDuration: shouldSlide ? nil : UX.actionBarFadeDuration
+                )
+            } completion: { _ in
+                guard self.modernActionBarDismissalID == dismissalID else { return }
+                self.modernActionBarDismissalID = nil
+                self.actionBar.alpha = 0
+                self.actionBar.setItem(nil)
+                self.dockActionBar(offset: 0)
+                
+                if wasShowingFindInPage && !shouldRestoreToolbarAtStart {
+                    self.onFindInPageVisibilityChanged?(false)
+                }
+            }
+            return
+        }
+        modernActionBarDismissalID = nil
         
         dockActionBar(offset: 0)
         actionBar.prepareForDismissal()
         let wasShowingFindInPage = actionBar.isShowingFindInPage
         
         let finish = {
+            guard self.actionBar.alpha == 0 else { return }
             self.actionBar.setItem(nil)
             if wasShowingFindInPage {
                 self.onFindInPageVisibilityChanged?(false)
@@ -256,7 +376,7 @@ final class BrowserChrome: UIView {
             return
         }
         
-        UIView.animate(withDuration: UX.actionBarAnimationDuration, animations: {
+        UIView.animate(withDuration: UX.actionBarFadeDuration, animations: {
             self.actionBar.alpha = 0
         }) { _ in
             finish()
@@ -381,18 +501,25 @@ final class BrowserChrome: UIView {
         _ text: String?,
         locationText: String?,
         locationTitle: String?,
-        showsBarMenu: Bool
+        showsBarMenu: Bool,
+        isErrorPage: Bool
     ) {
         addressBar.setText(
             text,
             locationText: locationText,
             locationTitle: locationTitle,
-            showsBarMenu: showsBarMenu
+            showsBarMenu: showsBarMenu,
+            isErrorPage: isErrorPage
         )
+        _ = updateToolbarTextTransition(textCenterProgress: toolbarTextCenterProgress)
     }
     
-    func updateAddressBarMenu(url: String?, usesDesktopWebsite: Bool?) {
-        addressBar.updateMenu(url: url, usesDesktopWebsite: usesDesktopWebsite)
+    func updateAddressBarMenu(url: String?, usesDesktopWebsite: Bool?, readerMode: ReaderModeState) {
+        addressBar.updateMenu(url: url, usesDesktopWebsite: usesDesktopWebsite, readerMode: readerMode)
+    }
+    
+    func updateAddressBarAudioButton(isVisible: Bool, isMuted: Bool) {
+        addressBar.updateAudioButton(isVisible: isVisible, isMuted: isMuted)
     }
     
     func setAddressBarLoadingProgress(_ progress: Float, isLoading: Bool) {
@@ -438,8 +565,8 @@ final class BrowserChrome: UIView {
         addressBar.performAfterMenuDismissal(action)
     }
     
-    func animateAutomaticNewTabTransition(to tab: Tab, completion: @escaping () -> Void) {
-        addressBar.animateAutomaticNewTabTransition(to: tab, completion: completion)
+    func animateAutomaticTabTransition(to tab: Tab, returning: Bool = false, completion: @escaping () -> Void) {
+        addressBar.animateAutomaticTabTransition(to: tab, returning: returning, completion: completion)
     }
     
     var isAddressBarEditing: Bool { return addressBar.isEditingText }
@@ -450,6 +577,54 @@ final class BrowserChrome: UIView {
     func updateNavigation(canGoBack: Bool, canGoForward: Bool, canShare: Bool) {
         topToolbar.updateNavigation(canGoBack: canGoBack, canGoForward: canGoForward, canShare: canShare)
         bottomToolbar.updateNavigation(canGoBack: canGoBack, canGoForward: canGoForward, canShare: canShare)
+    }
+    
+    func configureNavigationMenus(
+        itemsProvider: @escaping (ToolbarButtonMenus.NavigationDirection) -> [NavigationHistoryStore.HistoryItem],
+        onSelect: @escaping (ToolbarButtonMenus.NavigationDirection, Int) -> Void
+    ) {
+        topToolbar.configureNavigationMenus(itemsProvider: itemsProvider, onSelect: onSelect)
+        bottomToolbar.configureNavigationMenus(itemsProvider: itemsProvider, onSelect: onSelect)
+    }
+    
+    func configureRecentlyClosedTabsMenu(
+        isAvailable: @escaping () -> Bool,
+        itemsProvider: @escaping () -> [TabManagementStore.RecentlyClosedTabSnapshot],
+        onSelect: @escaping (UUID) -> Void
+    ) {
+        topToolbar.configureRecentlyClosedTabsMenu(
+            isAvailable: isAvailable,
+            itemsProvider: itemsProvider,
+            onSelect: onSelect
+        )
+    }
+    
+    func configureLibraryMenus(onSelect: @escaping (LibrarySection) -> Void) {
+        topToolbar.configureLibraryMenus(onSelect: onSelect)
+        bottomToolbar.configureLibraryMenus(onSelect: onSelect)
+    }
+    
+    func configureTabOverviewMenus(
+        tabCountProvider: @escaping () -> Int,
+        onCloseAllTabs: @escaping () -> Void,
+        onCloseTab: @escaping () -> Void,
+        onNewPrivateTab: @escaping () -> Void,
+        onNewTab: @escaping () -> Void
+    ) {
+        topToolbar.configureTabOverviewMenus(
+            tabCountProvider: tabCountProvider,
+            onCloseAllTabs: onCloseAllTabs,
+            onCloseTab: onCloseTab,
+            onNewPrivateTab: onNewPrivateTab,
+            onNewTab: onNewTab
+        )
+        bottomToolbar.configureTabOverviewMenus(
+            tabCountProvider: tabCountProvider,
+            onCloseAllTabs: onCloseAllTabs,
+            onCloseTab: onCloseTab,
+            onNewPrivateTab: onNewPrivateTab,
+            onNewTab: onNewTab
+        )
     }
     
     func updateDownload(_ summary: DownloadStoreSummary) {
@@ -468,7 +643,17 @@ final class BrowserChrome: UIView {
     
     // MARK: - Action Wiring
     
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        return toolbarCollapseProgress == 1 && state?.presentation == .browsing && state?.search == .inactive
+    }
+    
     private func configureToolbarActions() {
+        for toolbar in [topToolbar as UIView, bottomToolbar] {
+            let tapGesture = UITapGestureRecognizer(target: self, action: #selector(expandToolbar))
+            tapGesture.delegate = self
+            toolbar.addGestureRecognizer(tapGesture)
+        }
+        
         topToolbar.onSidebar = { [weak self] in self?.onSidebar?() }
         topToolbar.onBack = { [weak self] in self?.onBack?() }
         topToolbar.onForward = { [weak self] in self?.onForward?() }
@@ -493,6 +678,11 @@ final class BrowserChrome: UIView {
         }
         actionBar.onClearFindInPage = { [weak self] in self?.onClearFindInPage?() }
         actionBar.onClose = { [weak self] in self?.dismissActionBar(animated: true) }
+        actionBar.onKeyboardDismissal = { [weak self] in self?.onKeyboardDismissal?() }
+    }
+    
+    @objc private func expandToolbar() {
+        onToolbarExpansionRequested?()
     }
     
     // MARK: - Transitions
@@ -516,16 +706,43 @@ final class BrowserChrome: UIView {
     func setToolbarTransition(
         topOffset: CGFloat,
         bottomOffset: CGFloat,
-        topContentAlpha: CGFloat,
-        bottomContentAlpha: CGFloat
+        tabBarCollapseOffset: CGFloat,
+        collapseProgress: CGFloat,
+        textCenterProgress: CGFloat,
+        isBottomToolbarCollapsed: Bool,
+        animatesContent: Bool
     ) {
         topToolbar.transform = CGAffineTransform(translationX: 0, y: topOffset)
-        topToolbar.setContentAlpha(topContentAlpha)
+        topToolbar.setBackgroundCollapseOffset(tabBarCollapseOffset)
         bottomToolbar.transform = CGAffineTransform(translationX: 0, y: bottomOffset)
-        bottomToolbar.setContentAlpha(bottomContentAlpha)
         actionBar.transform = actionBarKeyboardBottomConstraint == nil
         ? CGAffineTransform(translationX: 0, y: bottomOffset)
         : .identity
+        let previousProgress = toolbarCollapseProgress
+        toolbarCollapseProgress = collapseProgress
+        toolbarTextCenterProgress = textCenterProgress
+        let isTextFullSize = updateToolbarTextTransition(textCenterProgress: textCenterProgress)
+        if collapseProgress == 0 || (collapseProgress < previousProgress && isTextFullSize) {
+            isToolbarContentHidden = false
+        } else if collapseProgress > previousProgress {
+            isToolbarContentHidden = true
+        }
+        
+        let contentAlpha: CGFloat = isToolbarContentHidden ? 0 : 1
+        let topAlpha: CGFloat = state?.mode == .phone ? 1 : contentAlpha
+        let bottomAlpha: CGFloat = isBottomToolbarCollapsed ? 0 : (state?.mode == .pad ? 1 : contentAlpha)
+        guard !animatesContent || toolbarContentAlphas != (topAlpha, bottomAlpha) else {
+            return
+        }
+        toolbarContentAlphas = (topAlpha, bottomAlpha)
+        UIView.animate(
+            withDuration: animatesContent ? UX.toolbarContentFadeDuration : 0,
+            delay: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseInOut]
+        ) {
+            self.topToolbar.setContentAlpha(topAlpha)
+            self.bottomToolbar.setContentAlpha(bottomAlpha)
+        }
     }
     
     func setChromeTransition(topAlpha: CGFloat, bottomAlpha: CGFloat, bottomTranslationY: CGFloat = 0) {
@@ -549,6 +766,48 @@ final class BrowserChrome: UIView {
         topToolbar.setSidebarButtonTransition(alpha: alpha, hidden: hidden)
     }
     
+    private func updateToolbarTextTransition(textCenterProgress: CGFloat) -> Bool {
+        guard toolbarCollapseProgress > 0,
+              let state,
+              state.presentation == .browsing,
+              state.search == .inactive,
+              let presentation = addressBar.toolbarTextPresentation(in: self) else {
+            toolbarTextLabel.isHidden = true
+            addressBar.setDisplayTextHidden(false)
+            return true
+        }
+        addressBar.setDisplayTextHidden(true)
+        let isBottom = state.mode == .phone
+        let toolbar = isBottom ? bottomToolbar as UIView : topToolbar
+        let offset = toolbar.transform.ty
+        let totalTravel = abs(offset) / toolbarCollapseProgress
+        let expandedFrame = presentation.frame.offsetBy(dx: 0, dy: -offset)
+        let minimizedTextCenterY = isBottom
+        ? bounds.maxY - safeAreaInsets.bottom - UX.minimizedToolbarContentHeight / 2
+        : state.topInset + UX.minimizedToolbarContentHeight / 2
+        let minimizedScale = UX.minimizedTextFontSize / presentation.font.pointSize
+        let minimizedTextHeight = presentation.font.lineHeight * minimizedScale
+        let targetEdge = minimizedTextCenterY + (isBottom ? minimizedTextHeight : -minimizedTextHeight) / 2
+        let edgeTravel = max(0, isBottom ? targetEdge - expandedFrame.maxY : expandedFrame.minY - targetEdge)
+        // Pin the outer text edge before scaling, leaving the last part of the travel for the toolbar.
+        let shrinkTravel = max(1, (totalTravel - edgeTravel) * UX.textShrinkTravelFraction)
+        let shrinkProgress = min(max((abs(offset) - edgeTravel) / shrinkTravel, 0), 1)
+        let scale = 1 + (minimizedScale - 1) * shrinkProgress
+        let textHeight = presentation.font.lineHeight * scale
+        let textEdge = isBottom ? min(presentation.frame.maxY, targetEdge) : max(presentation.frame.minY, targetEdge)
+        toolbarTextLabel.font = presentation.font
+        toolbarTextLabel.attributedText = presentation.text
+        toolbarTextLabel.bounds = CGRect(x: 0, y: 0, width: expandedFrame.width, height: presentation.font.lineHeight)
+        toolbarTextLabel.center = CGPoint(
+            x: expandedFrame.midX + (bounds.midX - expandedFrame.midX) * textCenterProgress,
+            y: textEdge + (isBottom ? -textHeight : textHeight) / 2
+        )
+        toolbarTextLabel.transform = CGAffineTransform(scaleX: scale, y: scale)
+        toolbarTextLabel.alpha = toolbar.alpha
+        toolbarTextLabel.isHidden = toolbar.isHidden
+        return shrinkProgress == 0
+    }
+    
     // MARK: - View Setup
     
     private func configureAppearance() {
@@ -558,14 +817,16 @@ final class BrowserChrome: UIView {
     
     private func configureHierarchy() {
         addSubview(topToolbar)
+        addSubview(tabBar)
         addSubview(bottomToolbar)
+        addSubview(toolbarTextLabel)
         addSubview(overlayDismissView)
         addSubview(overlayContentView)
+        addSubview(pageZoomDismissView)
         addSubview(actionBar)
     }
     
     private func configureConstraints() {
-        bottomConstraint = bottomToolbar.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -BottomToolbar.bottomInset)
         overlayWidthConstraint = overlayContentView.widthAnchor.constraint(equalToConstant: 0)
         overlayHeightConstraint = overlayContentView.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
@@ -573,11 +834,15 @@ final class BrowserChrome: UIView {
             topToolbar.trailingAnchor.constraint(equalTo: trailingAnchor),
             topToolbar.topAnchor.constraint(equalTo: topAnchor),
             
+            tabBar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tabBar.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tabBar.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
+            
             bottomToolbar.leadingAnchor.constraint(equalTo: leadingAnchor),
             bottomToolbar.trailingAnchor.constraint(equalTo: trailingAnchor),
-            bottomConstraint,
+            bottomToolbar.bottomAnchor.constraint(equalTo: bottomAnchor),
             
-            overlayDismissView.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
+            overlayDismissView.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
             overlayDismissView.leadingAnchor.constraint(equalTo: leadingAnchor),
             overlayDismissView.trailingAnchor.constraint(equalTo: trailingAnchor),
             overlayDismissView.bottomAnchor.constraint(equalTo: bottomToolbar.topAnchor),
@@ -585,9 +850,15 @@ final class BrowserChrome: UIView {
             overlayWidthConstraint,
             overlayHeightConstraint,
             
+            pageZoomDismissView.topAnchor.constraint(equalTo: topAnchor),
+            pageZoomDismissView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            pageZoomDismissView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            pageZoomDismissView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            
             actionBar.leadingAnchor.constraint(equalTo: leadingAnchor),
             actionBar.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
+        topToolbar.extendBackground(to: tabBar.bottomAnchor)
         bottomToolbar.configureTopAnchor(to: safeAreaLayoutGuide.bottomAnchor)
     }
     
@@ -602,6 +873,10 @@ final class BrowserChrome: UIView {
     
     @objc private func overlayDismissViewTapped() {
         onOverlayDismiss?()
+    }
+    
+    @objc private func pageZoomOutsideTapped() {
+        dismissActionBar(animated: true)
     }
     
     // MARK: - State Resolution
@@ -664,7 +939,7 @@ final class BrowserChrome: UIView {
             return
         }
         
-        UIView.animate(withDuration: UX.actionBarAnimationDuration, animations: animations)
+        UIView.animate(withDuration: UX.actionBarFadeDuration, animations: animations)
     }
     
     private func resolvedTopState(for state: State) -> TopToolbar.LayoutState {
@@ -683,12 +958,9 @@ final class BrowserChrome: UIView {
             return .compact
         case .phone:
             switch state.search {
-            case .inactive: return .standard
-            case .focused: return .focused
-            case .scrollingEmbeddedSuggestions: return .standard
+            case .inactive, .focused, .scrollingEmbeddedSuggestions: return .standard
             case .scrollingDetachedSuggestions: return .hidden
             }
         }
     }
-    
 }

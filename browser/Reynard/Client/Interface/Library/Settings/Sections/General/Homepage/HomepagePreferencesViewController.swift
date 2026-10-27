@@ -123,7 +123,7 @@ final class HomepagePreferencesViewController: SettingsTableViewController {
             }
             
             let openingScreen = HomepageOpeningScreen.allCases[indexPath.row]
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            let cell = SettingsTableViewCell(style: .default, reuseIdentifier: nil)
             cell.textLabel?.text = openingScreen.title
             cell.accessoryType = Prefs.HomepageSettings.openingScreen == openingScreen ? .checkmark : .none
             return cell
@@ -133,7 +133,7 @@ final class HomepagePreferencesViewController: SettingsTableViewController {
             }
             
             let row = HomepageSectionPreferencesViewController.OverviewRow.allCases[indexPath.row]
-            let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
+            let cell = SettingsTableViewCell(style: .value1, reuseIdentifier: nil)
             cell.textLabel?.text = row.title
             cell.detailTextLabel?.text = row.isEnabled ? NSLocalizedString("On", comment: "Enabled state") : NSLocalizedString("Off", comment: "Disabled state")
             cell.accessoryType = .disclosureIndicator
@@ -143,7 +143,7 @@ final class HomepagePreferencesViewController: SettingsTableViewController {
                 return UITableViewCell()
             }
             
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            let cell = SettingsTableViewCell(style: .default, reuseIdentifier: nil)
             cell.selectionStyle = .none
             switch HomepageBannerRow.allCases[indexPath.row] {
             case .recommendations:
@@ -159,7 +159,7 @@ final class HomepagePreferencesViewController: SettingsTableViewController {
                 return UITableViewCell()
             }
             
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            let cell = SettingsTableViewCell(style: .default, reuseIdentifier: nil)
             switch WallpaperRow.allCases[indexPath.row] {
             case .showWallpaper:
                 cell.textLabel?.text = NSLocalizedString("Show Wallpaper", comment: "")

@@ -12,6 +12,7 @@
 		01GECKO0022F2F289C001F0001 /* GeckoView.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 01GECKO0002F2F289C001F0001 /* GeckoView.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		02WCPBF12F3000000000001 /* Reynard Helper.appex in Embed Process Extensions */ = {isa = PBXBuildFile; fileRef = 02WCPAPP2F3000000000001 /* Reynard Helper.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		03OLPBF12F3100000000001 /* OpenIn.appex in Embed Process Extensions */ = {isa = PBXBuildFile; fileRef = 03OLAPP2F3100000000001 /* OpenIn.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		0A21DA010000000000000001 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 0A21DA010000000000000002 /* ZIPFoundation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,6 +101,7 @@
 		018C67B02F2F289E001F0BBB /* Exceptions for "Reynard" folder in "Reynard" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				JIT/RPPairing/libidevice_ffi.a,
 				JIT/Unsandboxed/ptrace_jit.c,
 				Resources/Info.plist,
 			);
@@ -171,6 +173,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				01GECKO0012F2F289C001F0001 /* GeckoView.framework in Frameworks */,
+				0A21DA010000000000000001 /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -266,6 +269,7 @@
 			);
 			name = Reynard;
 			packageProductDependencies = (
+				0A21DA010000000000000002 /* ZIPFoundation */,
 			);
 			productName = Reynard;
 			productReference = 018C679E2F2F289C001F0BBB /* Reynard.app */;
@@ -368,9 +372,18 @@
 				"zh-Hans",
 				fr,
 				ru,
+				ja,
+				cs,
+				pl,
+				"zh-Hant",
+				de,
+				vi,
 			);
 			mainGroup = 018C67952F2F289C001F0BBB;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				0A21DA010000000000000003 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 018C679F2F2F289C001F0BBB /* Products */;
 			projectDirPath = "";
@@ -501,7 +514,7 @@
 				DEVELOPMENT_TEAM = NAR5D6HWAD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Reynard/Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Reynard;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_DISPLAY_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Camera access lets websites in this browser scan QR codes, capture photos, and start video calls.";
@@ -538,6 +551,7 @@
 					"-lmozavutil",
 					"-lgkcodecs",
 					"-lmozinference",
+					"-Wl,-hidden-lidevice_ffi",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.minh-ton.Reynard";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -570,7 +584,7 @@
 				DEVELOPMENT_TEAM = NAR5D6HWAD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Reynard/Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Reynard;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_DISPLAY_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Camera access lets websites in this browser scan QR codes, capture photos, and start video calls.";
@@ -607,6 +621,7 @@
 					"-lmozavutil",
 					"-lgkcodecs",
 					"-lmozinference",
+					"-Wl,-hidden-lidevice_ffi",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.minh-ton.Reynard";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1086,6 +1101,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		0A21DA010000000000000003 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.20;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0A21DA010000000000000002 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A21DA010000000000000003 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 018C67962F2F289C001F0BBB /* Project object */;
 }

@@ -9,20 +9,32 @@ import UIKit
 
 final class FindInPageActionBar: UIView, UITextFieldDelegate {
     private enum UX {
-        static let backgroundHeight: CGFloat = 62
-        static let searchBarLeadingInset: CGFloat = 12
-        static let searchBarMaximumWidth: CGFloat = 640
-        static let searchBarToControlsSpacing: CGFloat = 12
-        static let controlsHeight: CGFloat = 38
+        static let contentLeadingInset: CGFloat = 12
+        static let contentMaximumWidth: CGFloat = 650
+        static var searchBarToControlsSpacing: CGFloat {
+            if #available(iOS 26.0, *) { return 8 }
+            return 12
+        }
+        static var controlsHeight: CGFloat {
+            if #available(iOS 26.0, *) { return 48 }
+            return 38
+        }
         static let searchContentInset: CGFloat = 12
         static let resultLabelWidth: CGFloat = 52
         static let resultLabelSpacing: CGFloat = 10
-        static let controlsWidth: CGFloat = controlButtonWidth * 2 + separatorWidth
-        static let controlButtonWidth: CGFloat = 55
+        static var controlsWidth: CGFloat { return controlButtonWidth * 2 + separatorWidth }
+        static var controlButtonWidth: CGFloat {
+            if #available(iOS 26.0, *) { return 40 }
+            return 55
+        }
         static let separatorWidth: CGFloat = 1
-        static let controlsCornerRadius: CGFloat = 19
+        static var controlsCornerRadius: CGFloat { return controlsHeight / 2 }
         static let controlSymbolPointSize: CGFloat = 14
-        static let contentTrailingInset: CGFloat = 53
+        static let doneSymbolColor = UIColor(red: 0.35, green: 1, blue: 1, alpha: 1)
+        static var contentTrailingInset: CGFloat {
+            if #available(iOS 26.0, *) { return 12 }
+            return 53
+        }
         static let backgroundAlpha: CGFloat = 0.34
         static let disabledAlpha: CGFloat = 0.32
         static let shadowOpacity: Float = 0.14
@@ -33,6 +45,7 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
     
     var onFind: ((_ query: String?, _ backwards: Bool) async -> (current: Int, total: Int)?)?
     var onClear: (() -> Void)?
+    var onDismiss: (() -> Void)?
     
     private let backgroundView: UIVisualEffectView = {
         let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
@@ -41,8 +54,21 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
         return view
     }()
     
-    private let searchField: UITextField = {
-        let field = UITextField()
+    private let searchContentView: UIView = {
+        let view: UIView
+        if #available(iOS 26.0, *) {
+            let effect = UIGlassContainerEffect()
+            effect.spacing = UX.searchBarToControlsSpacing
+            view = UIVisualEffectView(effect: effect)
+        } else {
+            view = UIView()
+        }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }()
+    
+    private let searchField: FindInPageTextField = {
+        let field = FindInPageTextField()
         field.translatesAutoresizingMaskIntoConstraints = false
         field.borderStyle = .none
         field.placeholder = NSLocalizedString("Find", comment: "Find in page search placeholder")
@@ -76,16 +102,23 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
         view.layer.shadowOpacity = UX.shadowOpacity
         view.layer.shadowRadius = UX.shadowRadius
         view.layer.shadowOffset = UX.shadowOffset
+        view.layer.shadowColor = UIColor.black.cgColor
         return view
     }()
     
     private let searchBarBackground: UIVisualEffectView = {
         let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
         view.translatesAutoresizingMaskIntoConstraints = false
-        view.contentView.backgroundColor = UIColor.systemBackground.withAlphaComponent(UX.backgroundAlpha)
+        view.contentView.backgroundColor = UIColor { traitCollection in
+            let backgroundColor: UIColor = traitCollection.userInterfaceStyle == .dark
+            ? .tertiarySystemBackground.withAlphaComponent(0.8)
+            : .systemBackground.withAlphaComponent(0.8)
+            return backgroundColor.resolvedColor(with: traitCollection)
+        }
         view.layer.cornerCurve = .continuous
         view.layer.cornerRadius = UX.controlsCornerRadius
         view.layer.borderWidth = UX.borderWidth
+        view.layer.borderColor = UIColor.separator.withAlphaComponent(0.2).cgColor
         view.clipsToBounds = true
         return view
     }()
@@ -99,16 +132,23 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
         view.layer.shadowOpacity = UX.shadowOpacity
         view.layer.shadowRadius = UX.shadowRadius
         view.layer.shadowOffset = UX.shadowOffset
+        view.layer.shadowColor = UIColor.black.cgColor
         return view
     }()
     
     private let controlsBackground: UIVisualEffectView = {
         let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
         view.translatesAutoresizingMaskIntoConstraints = false
-        view.contentView.backgroundColor = UIColor.systemBackground.withAlphaComponent(UX.backgroundAlpha)
+        view.contentView.backgroundColor = UIColor { traitCollection in
+            let backgroundColor: UIColor = traitCollection.userInterfaceStyle == .dark
+            ? .tertiarySystemBackground.withAlphaComponent(0.8)
+            : .systemBackground.withAlphaComponent(0.8)
+            return backgroundColor.resolvedColor(with: traitCollection)
+        }
         view.layer.cornerCurve = .continuous
         view.layer.cornerRadius = UX.controlsCornerRadius
         view.layer.borderWidth = UX.borderWidth
+        view.layer.borderColor = UIColor.separator.withAlphaComponent(0.2).cgColor
         view.clipsToBounds = true
         return view
     }()
@@ -130,7 +170,11 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
         return view
     }()
     
+    private var doneToolbar: UIToolbar?
     private var requestID = 0
+    private var searchContentViewCenterConstraint: NSLayoutConstraint!
+    private var searchContentViewLeadingConstraint: NSLayoutConstraint!
+    private var searchContentViewTrailingConstraint: NSLayoutConstraint!
     
     // MARK: - Lifecycle
     
@@ -140,9 +184,10 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
         configureHierarchy()
         configureConstraints()
         searchField.delegate = self
+        searchField.onDismiss = { [weak self] in
+            self?.onDismiss?()
+        }
         searchField.addTarget(self, action: #selector(searchTextChanged), for: .editingChanged)
-        updateShadowColor()
-        updateBorderColor()
         updateNavigationButtons()
     }
     
@@ -152,6 +197,7 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
     
     override func layoutSubviews() {
         super.layoutSubviews()
+        updateSearchContentLayout()
         [searchBarShadowView, controlsShadowView].forEach { view in
             view.layer.shadowPath = UIBezierPath(
                 roundedRect: view.bounds,
@@ -160,24 +206,33 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
         }
     }
     
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else {
-            return
-        }
-        
-        updateShadowColor()
-        updateBorderColor()
-    }
-    
     // MARK: - Presentation
     
-    func prepareForPresentation() {
+    @available(iOS 26.0, *)
+    func setModernContentHidden(_ hidden: Bool) {
+        let effect = UIGlassEffect(style: .regular)
+        effect.isInteractive = true
+        for view in [searchBarBackground, controlsBackground] {
+            view.effect = hidden ? nil : effect
+            view.contentView.alpha = hidden ? 0 : 1
+        }
+        effect.tintColor = .systemBlue
+        (doneToolbar?.superview?.superview as? UIVisualEffectView)?.effect = hidden ? nil : effect
+        doneToolbar?.alpha = hidden ? 0 : 1
+    }
+    
+    func prepareForPresentation(query: String?) {
         requestID += 1
         onClear?()
-        searchField.text = nil
-        setResultText(nil)
-        updateNavigationButtons()
+        searchField.text = query
+        
+        if let query, !query.isEmpty {
+            searchTextChanged()
+        } else {
+            setResultText(nil)
+            updateNavigationButtons()
+        }
+        
         DispatchQueue.main.async { [weak self] in
             self?.searchField.becomeFirstResponder()
         }
@@ -211,6 +266,10 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
     }
     
     // MARK: - Actions
+    
+    @objc private func doneTapped() {
+        onDismiss?()
+    }
     
     @objc private func searchTextChanged() {
         let query = searchField.text ?? ""
@@ -258,41 +317,121 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
     private func configureAppearance() {
         translatesAutoresizingMaskIntoConstraints = false
         backgroundColor = .clear
+        if #available(iOS 26.0, *) {
+            backgroundView.isHidden = true
+            separator.isHidden = true
+            for view in [searchBarBackground, controlsBackground] {
+                view.contentView.backgroundColor = .clear
+                view.layer.borderWidth = 0
+                view.layer.cornerRadius = 0
+                view.cornerConfiguration = .capsule()
+                view.clipsToBounds = false
+            }
+            for view in [searchBarShadowView, controlsShadowView] {
+                view.layer.shadowOpacity = 0
+            }
+        }
     }
     
     private func configureHierarchy() {
         addSubview(backgroundView)
-        addSubview(searchBarShadowView)
-        searchBarShadowView.addSubview(searchBarBackground)
+        addSubview(searchContentView)
+        let contentView = (searchContentView as? UIVisualEffectView)?.contentView ?? searchContentView
+        if #available(iOS 26.0, *) {
+            let background = UIVisualEffectView()
+            background.translatesAutoresizingMaskIntoConstraints = false
+            background.cornerConfiguration = .capsule()
+            contentView.addSubview(background)
+            let toolbar = UIToolbar()
+            toolbar.translatesAutoresizingMaskIntoConstraints = false
+            let configuration = UIImage.SymbolConfiguration(textStyle: .body, scale: .large)
+                .applying(UIImage.SymbolConfiguration(weight: .medium))
+            let image = UIImage(systemName: "checkmark", withConfiguration: configuration)?
+                .withTintColor(UX.doneSymbolColor, renderingMode: .alwaysOriginal)
+            let doneItem = UIBarButtonItem(image: image, style: .plain, target: self, action: #selector(doneTapped))
+            
+            doneItem.hidesSharedBackground = true
+            toolbar.items = [doneItem]
+            background.contentView.addSubview(toolbar)
+            doneToolbar = toolbar
+            
+            NSLayoutConstraint.activate([
+                background.topAnchor.constraint(equalTo: toolbar.topAnchor),
+                background.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor),
+                background.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor),
+                background.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            ])
+            
+            setModernContentHidden(false)
+        }
+        
+        contentView.addSubview(searchBarShadowView)
+        contentView.addSubview(searchBarBackground)
         searchBarBackground.contentView.addSubview(searchField)
         searchBarBackground.contentView.addSubview(resultLabel)
-        addSubview(controlsShadowView)
-        controlsShadowView.addSubview(controlsBackground)
+        contentView.addSubview(controlsShadowView)
+        contentView.addSubview(controlsBackground)
+        
         [previousMatchButton, separator, nextMatchButton].forEach {
             controlsBackground.contentView.addSubview($0)
         }
     }
     
     private func configureConstraints() {
-        let preferredSearchBarWidth = searchBarShadowView.widthAnchor.constraint(
-            equalToConstant: UX.searchBarMaximumWidth
+        let leading = doneToolbar == nil ? leadingAnchor : safeAreaLayoutGuide.leadingAnchor
+        let trailing = doneToolbar == nil ? trailingAnchor : safeAreaLayoutGuide.trailingAnchor
+        if let doneToolbar {
+            NSLayoutConstraint.activate([
+                doneToolbar.leadingAnchor.constraint(equalTo: searchContentView.leadingAnchor),
+                doneToolbar.centerYAnchor.constraint(equalTo: searchContentView.centerYAnchor),
+                doneToolbar.widthAnchor.constraint(equalToConstant: UX.controlsHeight),
+                doneToolbar.heightAnchor.constraint(equalToConstant: UX.controlsHeight),
+            ])
+        }
+        let preferredContentWidth = searchContentView.widthAnchor.constraint(
+            equalToConstant: UX.contentMaximumWidth
         )
-        preferredSearchBarWidth.priority = .defaultHigh
+        preferredContentWidth.priority = .defaultHigh
+        searchContentViewCenterConstraint = searchContentView.centerXAnchor.constraint(
+            equalTo: doneToolbar == nil ? centerXAnchor : safeAreaLayoutGuide.centerXAnchor
+        )
+        searchContentViewLeadingConstraint = searchContentView.leadingAnchor.constraint(
+            equalTo: leading,
+            constant: UX.contentLeadingInset
+        )
+        searchContentViewTrailingConstraint = searchContentView.trailingAnchor.constraint(
+            equalTo: trailing,
+            constant: -UX.contentTrailingInset
+        )
         
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: UX.backgroundHeight),
-            
             backgroundView.topAnchor.constraint(equalTo: topAnchor),
             backgroundView.leadingAnchor.constraint(equalTo: leadingAnchor),
             backgroundView.trailingAnchor.constraint(equalTo: trailingAnchor),
             backgroundView.bottomAnchor.constraint(equalTo: bottomAnchor),
             
-            searchBarShadowView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: UX.searchBarLeadingInset),
-            searchBarShadowView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            searchContentViewCenterConstraint,
+            searchContentView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            searchContentView.leadingAnchor.constraint(
+                greaterThanOrEqualTo: leading,
+                constant: UX.contentLeadingInset
+            ),
+            searchContentView.trailingAnchor.constraint(
+                lessThanOrEqualTo: trailing,
+                constant: -UX.contentTrailingInset
+            ),
+            searchContentView.widthAnchor.constraint(lessThanOrEqualToConstant: UX.contentMaximumWidth),
+            preferredContentWidth,
+            searchContentView.heightAnchor.constraint(equalToConstant: UX.controlsHeight),
+            
+            searchBarShadowView.leadingAnchor.constraint(
+                equalTo: doneToolbar?.trailingAnchor ?? searchContentView.leadingAnchor,
+                constant: doneToolbar == nil ? 0 : UX.searchBarToControlsSpacing
+            ),
+            searchBarShadowView.centerYAnchor.constraint(equalTo: searchContentView.centerYAnchor),
             searchBarShadowView.heightAnchor.constraint(equalToConstant: UX.controlsHeight),
-            preferredSearchBarWidth,
             searchBarShadowView.trailingAnchor.constraint(
-                lessThanOrEqualTo: controlsShadowView.leadingAnchor,
+                equalTo: controlsShadowView.leadingAnchor,
                 constant: -UX.searchBarToControlsSpacing
             ),
             
@@ -316,11 +455,8 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
             resultLabel.centerYAnchor.constraint(equalTo: searchBarBackground.contentView.centerYAnchor),
             resultLabel.widthAnchor.constraint(equalToConstant: UX.resultLabelWidth),
             
-            controlsShadowView.trailingAnchor.constraint(
-                equalTo: trailingAnchor,
-                constant: -UX.contentTrailingInset
-            ),
-            controlsShadowView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            controlsShadowView.trailingAnchor.constraint(equalTo: searchContentView.trailingAnchor),
+            controlsShadowView.centerYAnchor.constraint(equalTo: searchContentView.centerYAnchor),
             controlsShadowView.widthAnchor.constraint(equalToConstant: UX.controlsWidth),
             controlsShadowView.heightAnchor.constraint(equalToConstant: UX.controlsHeight),
             
@@ -345,6 +481,19 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
             nextMatchButton.bottomAnchor.constraint(equalTo: controlsBackground.contentView.bottomAnchor),
             nextMatchButton.widthAnchor.constraint(equalToConstant: UX.controlButtonWidth),
         ])
+    }
+    
+    private func updateSearchContentLayout() {
+        let horizontalSafeArea = doneToolbar == nil ? 0 : safeAreaInsets.left + safeAreaInsets.right
+        let availableWidth = bounds.width - horizontalSafeArea - UX.contentLeadingInset - UX.contentTrailingInset
+        let shouldCenter = availableWidth >= UX.contentMaximumWidth
+        guard searchContentViewCenterConstraint.isActive != shouldCenter else {
+            return
+        }
+        
+        searchContentViewCenterConstraint.isActive = shouldCenter
+        searchContentViewLeadingConstraint.isActive = !shouldCenter
+        searchContentViewTrailingConstraint.isActive = !shouldCenter
     }
     
     private func setResultText(_ text: String?) {
@@ -374,15 +523,5 @@ final class FindInPageActionBar: UIView, UITextFieldDelegate {
         button.tintColor = .label
         button.addTarget(self, action: action, for: .touchUpInside)
         return button
-    }
-    
-    private func updateShadowColor() {
-        let shadowColor: UIColor = traitCollection.userInterfaceStyle == .dark ? .white : .black
-        [searchBarShadowView, controlsShadowView].forEach { $0.layer.shadowColor = shadowColor.cgColor }
-    }
-    
-    private func updateBorderColor() {
-        let borderColor = UIColor.separator.withAlphaComponent(0.2).cgColor
-        [searchBarBackground, controlsBackground].forEach { $0.layer.borderColor = borderColor }
     }
 }

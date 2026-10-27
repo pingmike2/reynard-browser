@@ -21,8 +21,16 @@ extension BrowserViewController: SidebarContentController, SidebarCoordinatorHos
         return browserLayout
     }
     
+    var sidebarContentIsPrivate: Bool {
+        return tabManager.selectedTabMode == .private
+    }
+    
     func openExternalURL(_ url: URL) {
         tabManager.openExternalURL(url)
+    }
+    
+    func notifyScreenOrientationChanged(to interfaceOrientation: UIInterfaceOrientation) {
+        tabManager.selectedTab?.session.notifyScreenOrientationChanged(to: interfaceOrientation)
     }
     
     func sidebarDidEndEditing() {

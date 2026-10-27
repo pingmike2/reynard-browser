@@ -1,8 +1,8 @@
 diff --git a/gfx/ipc/RemoteCompositorSession.cpp b/gfx/ipc/RemoteCompositorSession.cpp
-index 5dbdea7f3eeb..b61b20e8442a 100644
+index 2a6c971e9460..14ab05f2d220 100644
 --- a/gfx/ipc/RemoteCompositorSession.cpp
 +++ b/gfx/ipc/RemoteCompositorSession.cpp
-@@ -11,9 +11,9 @@
+@@ -12,9 +12,9 @@
  #include "mozilla/layers/CompositorBridgeChild.h"
  #include "mozilla/layers/GeckoContentController.h"
  #include "nsIWidget.h"

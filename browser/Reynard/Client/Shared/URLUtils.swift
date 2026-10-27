@@ -43,6 +43,38 @@ enum URLUtils {
         return true
     }
     
+    static func fixTLDTypo(in value: String) -> String {
+        let hasScheme = value.contains("://")
+        let prefixedValue = hasScheme ? value : "https://\(value)"
+        guard var components = URLComponents(string: prefixedValue),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              let dot = host.lastIndex(of: ".") else {
+            return value
+        }
+        
+        let suffix = host[host.index(after: dot)...].lowercased()
+        let correctedSuffix: String
+        switch suffix {
+        case "ocm", "con", "cmo", "xom", "vom", "cpm", "com'":
+            correctedSuffix = "com"
+        case "ent", "ner", "nte", "met":
+            correctedSuffix = "net"
+        case "rog", "ogr", "prg", "orh":
+            correctedSuffix = "org"
+        default:
+            return value
+        }
+        
+        components.host = String(host[...dot]) + correctedSuffix
+        guard let correctedValue = components.string else {
+            return value
+        }
+        
+        return hasScheme ? correctedValue : String(correctedValue.dropFirst("https://".count))
+    }
+    
     static func normalizedCustomURL(from value: String) -> URL? {
         let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isWebURL(trimmedValue) else {
@@ -55,6 +87,18 @@ enum URLUtils {
         }
         
         return URL(string: "https://\(trimmedValue)")
+    }
+    
+    static func normalizedNewTabURL(from value: String) -> URL? {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let url = URL(string: trimmedValue),
+           url.scheme?.lowercased() == "moz-extension",
+           let host = url.host,
+           !host.isEmpty {
+            return url
+        }
+        
+        return normalizedCustomURL(from: trimmedValue)
     }
     
     static func sanitizedURL(for url: URL) -> URL? {
@@ -161,7 +205,7 @@ enum URLUtils {
         return String(lowered.dropFirst("www.".count))
     }
     
-    static func normalizedURLStringForMatching(from value: String) -> String {
+    nonisolated static func normalizedURLStringForMatching(from value: String) -> String {
         let remainder = removingSchemePrefix(from: value)
         guard let userInfoEnd = remainder.range(of: "@") else {
             return remainder.lowercased()
@@ -223,7 +267,7 @@ enum URLUtils {
         return [fullURL, schemeStrippedURL, normalizedURL]
     }
     
-    private static func removingSchemePrefix(from value: String) -> Substring {
+    nonisolated private static func removingSchemePrefix(from value: String) -> Substring {
         let prefix = value.prefix(64)
         guard let colon = prefix.firstIndex(of: ":") else {
             return value[...]

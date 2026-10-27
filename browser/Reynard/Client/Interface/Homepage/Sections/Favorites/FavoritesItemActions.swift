@@ -19,10 +19,10 @@ struct FavoritesItemActions {
         return UIContextMenuConfiguration(identifier: bookmark.guid as NSString, previewProvider: nil) { _ in
             UIMenu(title: "", children: [
                 UIMenu(title: "", options: .displayInline, children: [
-                    UIAction(title: NSLocalizedString("Open in New Tab", comment: ""), image: UIImage(named: "reynard.plus.square")) { _ in
+                    UIAction(title: NSLocalizedString("Open in New Tab", comment: ""), image: UIImage(named: "reynard.plus.square.on.square")) { _ in
                         openInNewTab()
                     },
-                    UIAction(title: NSLocalizedString("Open in New Private Tab", comment: ""), image: UIImage(named: "reynard.plus.square.fill")) { _ in
+                    UIAction(title: NSLocalizedString("Open in New Private Tab", comment: ""), image: UIImage(named: "reynard.plus.square.fill.on.square.fill")) { _ in
                         openInNewPrivateTab()
                     },
                 ]),
@@ -96,12 +96,17 @@ extension FavoritesSectionViewController: UIContextMenuInteractionDelegate {
                     
                     self.delegate?.homepageSection(self, didRequestOpenURL: bookmark.url, disposition: .newPrivateTab)
                 },
-                shareLink: { [weak self] url in
-                    guard let self else {
+                shareLink: { [weak self, weak anchorView] url in
+                    guard let self,
+                          let anchorView else {
                         return
                     }
                     
-                    self.delegate?.homepageSection(self, didRequestShareURL: url)
+                    self.delegate?.homepageSection(
+                        self,
+                        didRequestShareURL: url,
+                        sourceView: anchorView
+                    )
                 },
                 editBookmark: { [weak self] in
                     self?.presentBookmarkEditor(for: bookmark)

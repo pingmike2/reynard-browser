@@ -93,10 +93,6 @@ extension BrowserViewController: ContentOverlayCoordinatorHost, SearchOverlayCoo
         return tabOverview.isPresented
     }
     
-    var isHomepageTabOverviewTransitionRunning: Bool {
-        return tabOverview.isTransitionRunning
-    }
-    
     var isHomepageShowingFullscreenMedia: Bool {
         return isShowingFullscreenMedia
     }
@@ -110,7 +106,7 @@ extension BrowserViewController: ContentOverlayCoordinatorHost, SearchOverlayCoo
     }
     
     var homepageTabActions: ContextMenuTabActions {
-        return ContextMenuTabActions(tabManager: tabManager)
+        return ContextMenuTabActions(tabManager: tabManager, sessionManager: sessionManager)
     }
     
     func openURLFromHomepage(_ url: URL, disposition: TabOpenDisposition) {
@@ -146,14 +142,18 @@ extension BrowserViewController: ContentOverlayCoordinatorHost, SearchOverlayCoo
             }
             
             self.tabBar.setPendingExpansion(at: tabIndex)
-            self.browserChrome.animateAutomaticNewTabTransition(to: tab) { [weak self] in
+            self.browserChrome.animateAutomaticTabTransition(to: tab) { [weak self] in
                 self?.tabManager.selectTab(at: tabIndex, mode: mode)
             }
         }
     }
     
-    func shareURLFromHomepage(_ url: URL) {
-        presentShareSheet(url: url.absoluteString)
+    func shareURLFromHomepage(_ url: URL, sourceView: UIView) {
+        presentShareSheet(
+            items: [url],
+            sourceView: sourceView,
+            sourceRect: sourceView.bounds
+        )
     }
     
     func openSettingsFromHomepage() {
@@ -205,5 +205,17 @@ extension BrowserViewController: ContentOverlayCoordinatorHost, SearchOverlayCoo
     func addressBar(_ addressBar: AddressBar, didChangeText text: String, previousText: String, isDelete: Bool) {
         searchOverlayCoordinator.addressBar(addressBar, didChangeText: text, previousText: previousText, isDelete: isDelete)
         homepageOverlayCoordinator.addressBar(addressBar, didChangeText: text, previousText: previousText, isDelete: isDelete)
+    }
+    
+    func addressBarCanNavigateSuggestions(_ addressBar: AddressBar) -> Bool {
+        return searchOverlayCoordinator.canNavigateSuggestions
+    }
+    
+    func addressBar(_ addressBar: AddressBar, didMoveSuggestionSelectionBy offset: Int) {
+        searchOverlayCoordinator.moveSuggestionSelection(by: offset)
+    }
+    
+    func addressBarDidRequestSubmitSelectedSuggestion(_ addressBar: AddressBar) -> Bool {
+        return searchOverlayCoordinator.submitSelectedSuggestion()
     }
 }

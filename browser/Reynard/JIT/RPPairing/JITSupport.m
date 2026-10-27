@@ -775,7 +775,7 @@ static void postEndpointConnectivityFailure(NSNumber *pid, NSString *targetAddre
     if (error) userInfo[@"error"] = error;
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"me-minh-ton.jit.endpoint-monitor-failed" object:nil userInfo:userInfo];
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"JIT.EndpointMonitorDidFail" object:nil userInfo:userInfo];
     });
 }
 

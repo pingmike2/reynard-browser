@@ -9,7 +9,11 @@ import UIKit
 
 protocol HomepageRootViewControllerDelegate: AnyObject {
     func homepageRootViewController(_ controller: HomepageRootViewController, didRequestOpenURL url: URL, disposition: TabOpenDisposition)
-    func homepageRootViewController(_ controller: HomepageRootViewController, didRequestShareURL url: URL)
+    func homepageRootViewController(
+        _ controller: HomepageRootViewController,
+        didRequestShareURL url: URL,
+        sourceView: UIView
+    )
     func homepageRootViewController(_ controller: HomepageRootViewController, didRequestHideFromSuggestions siteID: Int64)
     func homepageRootViewController(_ controller: HomepageRootViewController, didSelectRecentlyClosedTab id: UUID)
     func homepageRootViewControllerDidSelectFolder(_ folder: BookmarkFolderSnapshot)
@@ -108,6 +112,11 @@ final class HomepageRootViewController: UIViewController {
         updateSectionStackWidth()
     }
     
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        updateScrollInsets()
+    }
+    
     // MARK: - Public API
     
     func setContentMode(_ contentMode: HomepageContentMode) {
@@ -174,8 +183,11 @@ final class HomepageRootViewController: UIViewController {
     private func updateScrollInsets() {
         let isAtTop = scrollView.contentOffset.y <= -scrollView.contentInset.top
         let effectiveVisibleContentInsets = contentMode.isDetached ? .zero : visibleContentInsets
+        let topInset = folder == nil
+        ? effectiveVisibleContentInsets.top + UX.topInset
+        : max(effectiveVisibleContentInsets.top, view.safeAreaInsets.top) + UX.folderTopInset
         let contentInset = UIEdgeInsets(
-            top: effectiveVisibleContentInsets.top + (folder == nil ? UX.topInset : UX.folderTopInset),
+            top: topInset,
             left: 0,
             bottom: effectiveVisibleContentInsets.bottom + UX.bottomInset,
             right: 0
@@ -396,8 +408,16 @@ extension HomepageRootViewController: HomepageSectionDelegate {
         delegate?.homepageRootViewController(self, didRequestOpenURL: url, disposition: disposition)
     }
     
-    func homepageSection(_ viewController: UIViewController, didRequestShareURL url: URL) {
-        delegate?.homepageRootViewController(self, didRequestShareURL: url)
+    func homepageSection(
+        _ viewController: UIViewController,
+        didRequestShareURL url: URL,
+        sourceView: UIView
+    ) {
+        delegate?.homepageRootViewController(
+            self,
+            didRequestShareURL: url,
+            sourceView: sourceView
+        )
     }
     
     func homepageSection(_ viewController: UIViewController, didRequestHideFromSuggestions siteID: Int64) {

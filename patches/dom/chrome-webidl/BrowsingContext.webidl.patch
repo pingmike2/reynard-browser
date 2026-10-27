@@ -1,8 +1,8 @@
 diff --git a/dom/chrome-webidl/BrowsingContext.webidl b/dom/chrome-webidl/BrowsingContext.webidl
-index d0508a8c29e5..583aa9b53f80 100644
+index 38fd39f06618..ce72abc0f215 100644
 --- a/dom/chrome-webidl/BrowsingContext.webidl
 +++ b/dom/chrome-webidl/BrowsingContext.webidl
-@@ -122,6 +122,10 @@ interface BrowsingContext {
+@@ -122,6 +122,12 @@ interface BrowsingContext {
  
    [SetterThrows] attribute [LegacyNullToEmptyString] DOMString customPlatform;
  
@@ -10,6 +10,8 @@ index d0508a8c29e5..583aa9b53f80 100644
 +
 +  [SetterThrows] attribute [LegacyNullToEmptyString] DOMString customOscpu;
 +
-   [SetterThrows] attribute [LegacyNullToEmptyString] DOMString customUserAgent;
++  [SetterThrows] attribute [LegacyNullToEmptyString] DOMString customBuildID;
++
+   [SetterThrows] attribute [LegacyNullToEmptyString] UTF8String customUserAgent;
  
    readonly attribute DOMString embedderElementType;

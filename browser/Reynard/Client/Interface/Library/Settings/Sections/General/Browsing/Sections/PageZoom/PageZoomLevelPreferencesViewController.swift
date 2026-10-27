@@ -52,7 +52,7 @@ final class PageZoomLevelPreferencesViewController: SettingsTableViewController 
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+        let cell = SettingsTableViewCell(style: .default, reuseIdentifier: nil)
         guard PageZoomLevels.all.indices.contains(indexPath.row) else {
             return cell
         }
@@ -74,7 +74,7 @@ final class PageZoomLevelPreferencesViewController: SettingsTableViewController 
         case .defaultZoom:
             Prefs.BrowsingSettings.defaultPageZoomLevel = level
         case .site(let host, _):
-            _ = SiteSettingsStore.shared.setPageZoom(level, forHost: host)
+            _ = SiteSettingsStore.shared.setPageZoom(level, for: host)
             mode = .site(host: host, pageZoom: level)
         }
         tableView.reloadData()

@@ -94,19 +94,19 @@ final class PageZoomPreferencesViewController: SettingsTableViewController {
         
         switch row {
         case .defaultZoom:
-            let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
+            let cell = SettingsTableViewCell(style: .value1, reuseIdentifier: nil)
             cell.textLabel?.text = NSLocalizedString("Zoom Level", comment: "")
             configureZoomPickerCell(cell, mode: .defaultZoom)
             return cell
         case .site(let setting):
-            let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
+            let cell = SettingsTableViewCell(style: .value1, reuseIdentifier: nil)
             cell.textLabel?.text = setting.host
             if let pageZoom = setting.pageZoom {
                 configureZoomPickerCell(cell, mode: .site(host: setting.host, pageZoom: pageZoom))
             }
             return cell
         case .reset:
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            let cell = SettingsTableViewCell(style: .default, reuseIdentifier: nil)
             cell.textLabel?.text = NSLocalizedString("Reset Page Zoom Settings", comment: "")
             cell.textLabel?.textColor = .systemRed
             cell.textLabel?.textAlignment = .center
@@ -143,7 +143,7 @@ final class PageZoomPreferencesViewController: SettingsTableViewController {
         }
         
         let deleteAction = UIContextualAction(style: .destructive, title: NSLocalizedString("Delete", comment: "")) { [weak self] _, _, completion in
-            _ = SiteSettingsStore.shared.clearPageZoom(forHost: setting.host)
+            _ = SiteSettingsStore.shared.clearPageZoom(for: setting.host)
             self?.reloadPageZoomSettings()
             self?.tableView.reloadData()
             completion(true)
@@ -191,7 +191,7 @@ final class PageZoomPreferencesViewController: SettingsTableViewController {
         case .defaultZoom:
             Prefs.BrowsingSettings.defaultPageZoomLevel = level
         case .site(let host, _):
-            _ = SiteSettingsStore.shared.setPageZoom(level, forHost: host)
+            _ = SiteSettingsStore.shared.setPageZoom(level, for: host)
         }
         reloadPageZoomSettings()
         tableView.reloadData()

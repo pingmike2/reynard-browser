@@ -157,8 +157,14 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             2>&1 | tee dist/xcodebuild.log
 
-      - name: Package IPA and TrollStore TIPA
+      - name: Package IPA
         run: ./tools/release/create-ipa.sh
+
+      - name: Package TrollStore TIPA
+        run: ./tools/release/create-ipa.sh --trollstore
+
+      - name: Package Jailbroken IPA
+        run: ./tools/release/create-ipa.sh --jailbroken
 
       - name: Upload diagnostic artifacts
         if: success()

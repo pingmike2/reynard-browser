@@ -1,9 +1,9 @@
 diff --git a/widget/uikit/GeckoPointerSupport.mm b/widget/uikit/GeckoPointerSupport.mm
 new file mode 100644
-index 000000000000..0d3491b33720
+index 000000000000..e7e5c5eceee2
 --- /dev/null
 +++ b/widget/uikit/GeckoPointerSupport.mm
-@@ -0,0 +1,782 @@
+@@ -0,0 +1,789 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,10 +16,11 @@ index 000000000000..0d3491b33720
 +#include <cmath>
 +
 +#include "GeckoEditableSupport.h"
++#include "GeckoKeyboardSupport.h"
 +#include "InputData.h"
++#include "TextInputHandler.h"
 +#include "nsGkAtoms.h"
 +#include "nsWindow.h"
-+#include "TextInputHandler.h"
 +
 +#include "mozilla/MiscEvents.h"
 +#include "mozilla/MouseEvents.h"
@@ -33,7 +34,7 @@ index 000000000000..0d3491b33720
 +namespace SimpleGestureEventBinding = mozilla::dom::SimpleGestureEvent_Binding;
 +
 +@interface ChildView : UIView
-+- (void)showEditMenuForSecondaryClick;
++- (void)showEditMenuForSecondaryClickAtPoint:(CGPoint)aPoint;
 +@end
 +
 +@interface UIPanGestureRecognizer (Private)
@@ -47,14 +48,17 @@ index 000000000000..0d3491b33720
 +
 +@interface GeckoScrollGestureRecognizer : UIPanGestureRecognizer
 +- (NSTimeInterval)scrollTimestamp;
++- (BOOL)isContinuousScroll API_AVAILABLE(ios(13.4));
 +@end
 +
 +@implementation GeckoScrollGestureRecognizer {
 +  NSTimeInterval mScrollTimestamp;
++  BOOL mIsContinuousScroll;
 +}
 +
 +- (void)_scrollingChangedWithEvent:(UIEvent*)event API_AVAILABLE(ios(13.4)) {
 +  mScrollTimestamp = event.timestamp;
++  mIsContinuousScroll = [event _scrollType] == UIScrollTypeContinuous;
 +  [self _setiOSMacUseNonacceleratedDelta:[event _scrollType] ==
 +                                         UIScrollTypeContinuous];
 +  [super _scrollingChangedWithEvent:event];
@@ -62,6 +66,10 @@ index 000000000000..0d3491b33720
 +
 +- (NSTimeInterval)scrollTimestamp {
 +  return mScrollTimestamp;
++}
++
++- (BOOL)isContinuousScroll {
++  return mIsContinuousScroll;
 +}
 +
 +@end
@@ -74,37 +82,9 @@ index 000000000000..0d3491b33720
 +  return [NSProcessInfo.processInfo isOperatingSystemAtLeastVersion:version];
 +}
 +
-+static Modifiers GeckoModifiersForUIKitModifiers(
-+    UIKeyModifierFlags aModifiers) {
-+  Modifiers modifiers = MODIFIER_NONE;
-+  if (aModifiers & UIKeyModifierAlphaShift) {
-+    modifiers |= MODIFIER_CAPSLOCK;
-+  }
-+  if (aModifiers & UIKeyModifierShift) {
-+    modifiers |= MODIFIER_SHIFT;
-+  }
-+  if (aModifiers & UIKeyModifierControl) {
-+    modifiers |= MODIFIER_CONTROL;
-+  }
-+  if (aModifiers & UIKeyModifierAlternate) {
-+    modifiers |= MODIFIER_ALT;
-+  }
-+  if (aModifiers & UIKeyModifierCommand) {
-+    modifiers |= MODIFIER_META;
-+  }
-+  if (aModifiers & UIKeyModifierNumericPad) {
-+    modifiers |= MODIFIER_NUMLOCK;
-+  }
-+  return modifiers;
-+}
-+
 +static TimeStamp GeckoTimeStampForUIKitTimestamp(NSTimeInterval aTimestamp) {
 +  NSTimeInterval age = NSProcessInfo.processInfo.systemUptime - aTimestamp;
 +  return TimeStamp::Now() - TimeDuration::FromSeconds(age);
-+}
-+
-+static TimeStamp GeckoTimeStampForUIKitEvent(UIEvent* aEvent) {
-+  return GeckoTimeStampForUIKitTimestamp(aEvent.timestamp);
 +}
 +
 +static MouseButton GeckoMouseButtonForUIKitButton(NSInteger aButtonNumber) {
@@ -156,7 +136,6 @@ index 000000000000..0d3491b33720
 +  CGPoint mScrollLocation;
 +  CGFloat mLastPinchSpan;
 +  BOOL mPointerInside;
-+  BOOL mSecondaryClickHandledAsTextAction;
 +  GeckoEdgeSwipeDirections mEdgeSwipeDirection;
 +}
 +
@@ -175,6 +154,7 @@ index 000000000000..0d3491b33720
 +  mHoverRecognizer =
 +      [[UIHoverGestureRecognizer alloc] initWithTarget:self
 +                                                action:@selector(handleHover:)];
++  mHoverRecognizer.allowedTouchTypes = @[ @(UITouchTypeIndirectPointer) ];
 +  [mView addGestureRecognizer:mHoverRecognizer];
 +
 +  mScrollRecognizer = [[GeckoScrollGestureRecognizer alloc]
@@ -216,10 +196,21 @@ index 000000000000..0d3491b33720
 +    return;
 +  }
 +
++  [self excludeIndirectPointerFromSystemSecondaryClickDriver];
 +  for (UITextInteraction* interaction in textInteractions) {
 +    for (UIGestureRecognizer* gesture in interaction
 +             .gesturesForFailureRequirements) {
 +      [gesture requireGestureRecognizerToFail:mSecondaryClickRecognizer];
++    }
++  }
++}
++
++- (void)excludeIndirectPointerFromSystemSecondaryClickDriver {
++  for (UIGestureRecognizer* gesture in mView.gestureRecognizers) {
++    if ([NSStringFromClass(gesture.class)
++            isEqualToString:@"_UISecondaryClickDriverGestureRecognizer"]) {
++      gesture.allowedTouchTypes =
++          @[ @(UITouchTypeDirect), @(UITouchTypePencil) ];
 +    }
 +  }
 +}
@@ -285,7 +276,16 @@ index 000000000000..0d3491b33720
 +  contextMenuEvent.mClickCount = clickCount;
 +  contextMenuEvent.mModifiers = modifiers;
 +  contextMenuEvent.mTimeStamp = timestamp;
-+  mGeckoChild->DispatchInputEvent(&contextMenuEvent);
++
++  // Prioritize page's contextmenu -> UIMenuController
++  nsIWidget::ContentAndAPZEventStatus contextMenuStatus =
++      mGeckoChild->DispatchInputEvent(&contextMenuEvent);
++  BOOL insideFocusedEditor = [self isPointInsideFocusedEditor:location];
++  if (contextMenuStatus.mApzStatus != nsEventStatus_eConsumeNoDefault &&
++      contextMenuStatus.mContentStatus != nsEventStatus_eConsumeNoDefault &&
++      insideFocusedEditor) {
++    [mView showEditMenuForSecondaryClickAtPoint:location];
++  }
 +}
 +
 +- (void)synchronizePointerButtons:(UIEventButtonMask)buttons
@@ -311,21 +311,6 @@ index 000000000000..0d3491b33720
 +    } else {
 +      mPointerButtons &= ~buttonMask;
 +    }
-+    if (button == MouseButton::eSecondary) {
-+      if (pressed) {
-+        mSecondaryClickHandledAsTextAction =
-+            [self isPointInsideFocusedEditor:location];
-+        if (mSecondaryClickHandledAsTextAction) {
-+          [mView showEditMenuForSecondaryClick];
-+        }
-+      }
-+      if (mSecondaryClickHandledAsTextAction) {
-+        if (!pressed) {
-+          mSecondaryClickHandledAsTextAction = NO;
-+        }
-+        continue;
-+      }
-+    }
 +    EventMessage message = pressed ? eMouseDown : eMouseUp;
 +    [self dispatchMouseEvent:message
 +                    location:location
@@ -343,12 +328,12 @@ index 000000000000..0d3491b33720
 +
 +- (BOOL)isPointInsideFocusedEditor:(CGPoint)point {
 +  if (![mView isFirstResponder] || !mGeckoChild ||
-+      mGeckoChild->IsVirtualKeyboardDisabled()) {
++      !mGeckoChild->GetInputContext().mIMEState.IsEditable()) {
 +    return NO;
 +  }
 +
 +  TextInputHandler* handler = mGeckoChild->GetTextInputHandler();
-+  LayoutDeviceIntRect editorDevRect;
++  LayoutDeviceRect editorDevRect;
 +  if (!handler || !handler->EditorRect(editorDevRect)) {
 +    return NO;
 +  }
@@ -389,7 +374,8 @@ index 000000000000..0d3491b33720
 +                         clickCount:touch.tapCount
 +                          modifiers:GeckoModifiersForUIKitModifiers(
 +                                        event.modifierFlags)
-+                          timestamp:GeckoTimeStampForUIKitEvent(event)
++                          timestamp:GeckoTimeStampForUIKitTimestamp(
++                                        event.timestamp)
 +                         allowClick:YES];
 +  }
 +}
@@ -423,7 +409,8 @@ index 000000000000..0d3491b33720
 +                         clickCount:touch.tapCount
 +                          modifiers:GeckoModifiersForUIKitModifiers(
 +                                        event.modifierFlags)
-+                          timestamp:GeckoTimeStampForUIKitEvent(event)
++                          timestamp:GeckoTimeStampForUIKitTimestamp(
++                                        event.timestamp)
 +                         allowClick:YES];
 +  }
 +}
@@ -437,7 +424,7 @@ index 000000000000..0d3491b33720
 +  for (UITouch* touch in pointerTouches) {
 +    CGPoint location = [touch locationInView:mView];
 +    Modifiers modifiers = GeckoModifiersForUIKitModifiers(event.modifierFlags);
-+    TimeStamp timestamp = GeckoTimeStampForUIKitEvent(event);
++    TimeStamp timestamp = GeckoTimeStampForUIKitTimestamp(event.timestamp);
 +    [self synchronizePointerButtons:event.buttonMask
 +                           location:location
 +                         clickCount:touch.tapCount
@@ -554,6 +541,29 @@ index 000000000000..0d3491b33720
 +  panEvent.mSimulateMomentum = true;
 +  panEvent.mAllowFlingAcceleration = false;
 +  mGeckoChild->DispatchPanGestureInput(panEvent);
++
++  if ([(GeckoScrollGestureRecognizer*)sender isContinuousScroll]) {
++    switch (sender.state) {
++      case UIGestureRecognizerStateBegan:
++        [mInteractionDelegate trackpadScrollDidBegin:displacement];
++        break;
++      case UIGestureRecognizerStateChanged:
++        [mInteractionDelegate trackpadScrollDidUpdate:displacement];
++        break;
++      case UIGestureRecognizerStateEnded:
++        if (!CGPointEqualToPoint(displacement, CGPointZero)) {
++          [mInteractionDelegate trackpadScrollDidUpdate:displacement];
++        }
++        [mInteractionDelegate trackpadScrollDidEnd];
++        break;
++      case UIGestureRecognizerStateCancelled:
++        [mInteractionDelegate trackpadScrollDidCancel];
++        break;
++      default:
++        break;
++    }
++  }
++
 +  [sender setTranslation:CGPointZero inView:mView];
 +}
 +
@@ -681,25 +691,22 @@ index 000000000000..0d3491b33720
 +  }
 +}
 +
-+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gestureRecognizer {
-+  if (gestureRecognizer != mSecondaryClickRecognizer) {
-+    return YES;
-+  }
-+
-+  return ![self
-+      isPointInsideFocusedEditor:[gestureRecognizer locationInView:mView]];
-+}
-+
 +- (BOOL)gestureRecognizer:(UIGestureRecognizer*)gestureRecognizer
 +       shouldReceiveEvent:(UIEvent*)event API_AVAILABLE(ios(13.4)) {
++  if (gestureRecognizer == mSecondaryClickRecognizer) {
++    if (event.buttonMask & UIEventButtonMaskSecondary) {
++      [self excludeIndirectPointerFromSystemSecondaryClickDriver];
++    }
++  }
 +  if (mGeckoChild && gestureRecognizer == mScrollRecognizer &&
 +      event.type == UIEventTypeScroll) {
 +    LayoutDeviceIntPoint point =
 +        GeckoPointForUIKitPoint(mLastPointerLocation, mView);
 +    PanGestureInput panEvent(
 +        PanGestureInput::PANGESTURE_MAYSTART,
-+        GeckoTimeStampForUIKitEvent(event), ScreenPoint(point.x, point.y),
-+        ScreenPoint(), GeckoModifiersForUIKitModifiers(event.modifierFlags));
++        GeckoTimeStampForUIKitTimestamp(event.timestamp),
++        ScreenPoint(point.x, point.y), ScreenPoint(),
++        GeckoModifiersForUIKitModifiers(event.modifierFlags));
 +    mGeckoChild->DispatchPanGestureInput(panEvent);
 +  }
 +  if (gestureRecognizer == mPinchRecognizer) {

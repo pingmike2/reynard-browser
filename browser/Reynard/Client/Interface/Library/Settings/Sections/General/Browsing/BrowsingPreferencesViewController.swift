@@ -11,7 +11,7 @@ final class BrowsingPreferencesViewController: SettingsTableViewController {
     private enum Section: CaseIterable {
         case previews
         case content
-        case external
+        case links
         
         var text: SettingsSectionText {
             switch self {
@@ -19,8 +19,8 @@ final class BrowsingPreferencesViewController: SettingsTableViewController {
                 return SettingsSectionText(headerTitle: NSLocalizedString("Previews", comment: "Browsing settings section title"))
             case .content:
                 return SettingsSectionText(headerTitle: NSLocalizedString("Content", comment: "Browsing settings section title"))
-            case .external:
-                return SettingsSectionText()
+            case .links:
+                return SettingsSectionText(headerTitle: NSLocalizedString("Links", comment: "Browsing settings section title"))
             }
         }
     }
@@ -33,10 +33,12 @@ final class BrowsingPreferencesViewController: SettingsTableViewController {
     private enum ContentRow: CaseIterable {
         case allWebsites
         case pageZoom
+        case reader
     }
     
-    private enum ExternalAppsRow: CaseIterable {
-        case openLinks
+    private enum LinksRow: CaseIterable {
+        case openLinksInExternalApps
+        case openLinksInNewTabs
     }
     
     private let showLinkPreviewsSwitch = UISwitch()
@@ -78,8 +80,8 @@ final class BrowsingPreferencesViewController: SettingsTableViewController {
             return PreviewsRow.allCases.count
         case .content:
             return ContentRow.allCases.count
-        case .external:
-            return ExternalAppsRow.allCases.count
+        case .links:
+            return LinksRow.allCases.count
         }
     }
     
@@ -102,14 +104,14 @@ final class BrowsingPreferencesViewController: SettingsTableViewController {
             }
             switch PreviewsRow.allCases[indexPath.row] {
             case .showLinkPreviews:
-                let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+                let cell = SettingsTableViewCell(style: .subtitle, reuseIdentifier: nil)
                 cell.selectionStyle = .none
                 cell.textLabel?.text = NSLocalizedString("Show Link Previews", comment: "")
                 cell.detailTextLabel?.textColor = .secondaryLabel
                 cell.accessoryView = showLinkPreviewsSwitch
                 return cell
             case .showImagePreviews:
-                let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+                let cell = SettingsTableViewCell(style: .subtitle, reuseIdentifier: nil)
                 cell.selectionStyle = .none
                 cell.textLabel?.text = NSLocalizedString("Show Image Previews", comment: "")
                 cell.detailTextLabel?.textColor = .secondaryLabel
@@ -120,24 +122,36 @@ final class BrowsingPreferencesViewController: SettingsTableViewController {
             guard ContentRow.allCases.indices.contains(indexPath.row) else {
                 return UITableViewCell()
             }
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            let cell = SettingsTableViewCell(style: .default, reuseIdentifier: nil)
             switch ContentRow.allCases[indexPath.row] {
             case .allWebsites:
                 cell.textLabel?.text = NSLocalizedString("Request Desktop Website", comment: "")
             case .pageZoom:
                 cell.textLabel?.text = NSLocalizedString("Page Zoom", comment: "")
+            case .reader:
+                cell.textLabel?.text = NSLocalizedString("Reader", comment: "")
             }
             cell.accessoryType = .disclosureIndicator
             return cell
-        case .external:
-            guard ExternalAppsRow.allCases.indices.contains(indexPath.row) else {
+        case .links:
+            guard LinksRow.allCases.indices.contains(indexPath.row) else {
                 return UITableViewCell()
             }
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            cell.textLabel?.text = NSLocalizedString("Open Links in External Apps", comment: "")
-            cell.selectionStyle = .none
-            cell.accessoryView = openLinksInExternalAppsSwitch
-            return cell
+            switch LinksRow.allCases[indexPath.row] {
+            case .openLinksInExternalApps:
+                let cell = SettingsTableViewCell(style: .default, reuseIdentifier: nil)
+                cell.textLabel?.text = NSLocalizedString("Open Links in External Apps", comment: "")
+                cell.selectionStyle = .none
+                cell.accessoryView = openLinksInExternalAppsSwitch
+                return cell
+            case .openLinksInNewTabs:
+                let cell = SettingsTableViewCell(style: .value1, reuseIdentifier: nil)
+                cell.textLabel?.text = NSLocalizedString("Open Links in New Tabs", comment: "")
+                cell.detailTextLabel?.text = Prefs.BrowsingSettings.openLinksInNewTabsBehavior.title
+                cell.detailTextLabel?.textColor = .secondaryLabel
+                cell.accessoryType = .disclosureIndicator
+                return cell
+            }
         }
     }
     
@@ -159,9 +173,22 @@ final class BrowsingPreferencesViewController: SettingsTableViewController {
                 navigationController?.pushViewController(RequestDesktopWebsitePreferencesViewController(), animated: true)
             case .pageZoom:
                 navigationController?.pushViewController(PageZoomPreferencesViewController(), animated: true)
+            case .reader:
+                navigationController?.pushViewController(ReaderPreferencesViewController(), animated: true)
             }
-        case .external:
-            return
+        case .links:
+            guard LinksRow.allCases.indices.contains(indexPath.row) else {
+                return
+            }
+            switch LinksRow.allCases[indexPath.row] {
+            case .openLinksInExternalApps:
+                return
+            case .openLinksInNewTabs:
+                navigationController?.pushViewController(
+                    OpenLinksInNewTabsPreferencesViewController(),
+                    animated: true
+                )
+            }
         }
     }
     

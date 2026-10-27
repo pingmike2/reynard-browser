@@ -25,7 +25,7 @@ class GeckoRuntimeImpl: NSObject, SwiftGeckoViewRuntime {
         return GeckoEventDispatcherWrapper.runtimeInstance
     }
     
-    func dispatcher(byName name: UnsafePointer<CChar>!) -> any SwiftEventDispatcher {
+    func dispatcher(byName name: UnsafePointer<CChar>) -> any SwiftEventDispatcher {
         return GeckoEventDispatcherWrapper.lookup(byName: String(cString: name))
     }
     
@@ -89,6 +89,13 @@ public class GeckoRuntime {
         GeckoEventDispatcherWrapper.runtimeInstance.dispatch(
             type: "GeckoView:SetDefaultPrefs",
             message: preferences
+        )
+    }
+    
+    public static func dispatchEvent(type: String, message: [String: Any?]? = nil) {
+        GeckoEventDispatcherWrapper.runtimeInstance.dispatch(
+            type: type,
+            message: message
         )
     }
     
