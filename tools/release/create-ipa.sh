@@ -42,9 +42,12 @@ fi
 
 # I absolutely hate Apple for this
 # Why is my bundle identifier just become unavailable for no reason?
-plutil -replace CFBundleIdentifier -string "com.minh-ton.Reynard" "$APP_PATH/Info.plist"
-plutil -replace CFBundleIdentifier -string "com.minh-ton.Reynard.Helper" "$APP_PATH/PlugIns/Reynard Helper.appex/Info.plist"
-plutil -replace CFBundleIdentifier -string "com.minh-ton.Reynard.OpenIn" "$APP_PATH/PlugIns/OpenIn.appex/Info.plist"
+# 覆盖默认 bundle id 前缀（自签安装时可避开与官方包冲突）：
+#   BUNDLE_ID_PREFIX=com.example ./tools/release/create-ipa.sh --jailbroken
+BUNDLE_ID_PREFIX="${BUNDLE_ID_PREFIX:-com.minh-ton}"
+plutil -replace CFBundleIdentifier -string "${BUNDLE_ID_PREFIX}.Reynard" "$APP_PATH/Info.plist"
+plutil -replace CFBundleIdentifier -string "${BUNDLE_ID_PREFIX}.Reynard.Helper" "$APP_PATH/PlugIns/Reynard Helper.appex/Info.plist"
+plutil -replace CFBundleIdentifier -string "${BUNDLE_ID_PREFIX}.Reynard.OpenIn" "$APP_PATH/PlugIns/OpenIn.appex/Info.plist"
 
 rm -rf "$WORK_DIR" "$ROOT_DIR/dist/$OUTPUT_NAME"
 mkdir -p "$WORK_DIR/Payload"
@@ -73,13 +76,24 @@ ldid -S"$ROOT_DIR/browser/Helper/Entitlements/Reynard-Helper.private.entitlement
 
 # Gecko dylibs/XUL 与 GeckoView.framework 需要 ldid 伪签名
 # （无证书 CI 构建时 AddGecko.sh 跳过了 codesign）
+SIGN_FAILED=0
 if [ -d "Payload/Reynard.app/Frameworks/GeckoView.framework" ]; then
 	for fw_file in "Payload/Reynard.app/Frameworks/GeckoView.framework/Frameworks/"*.dylib "Payload/Reynard.app/Frameworks/GeckoView.framework/Frameworks/XUL" "Payload/Reynard.app/Frameworks/GeckoView.framework/Frameworks/"*.rs "Payload/Reynard.app/Frameworks/GeckoView.framework/XUL" "Payload/Reynard.app/Frameworks/GeckoView.framework/"*.so; do
 		if [ -f "$fw_file" ]; then
-			ldid -S "$fw_file" 2>/dev/null || true
+			if ! ldid -S "$fw_file"; then
+				echo "::error::ldid failed to pseudo-sign $fw_file"
+				SIGN_FAILED=1
+			fi
 		fi
 	done
-	ldid -S "Payload/Reynard.app/Frameworks/GeckoView.framework" 2>/dev/null || true
+	if ! ldid -S "Payload/Reynard.app/Frameworks/GeckoView.framework"; then
+		echo "::error::ldid failed to pseudo-sign GeckoView.framework"
+		SIGN_FAILED=1
+	fi
+	if [ "${SIGN_FAILED:-0}" -ne 0 ]; then
+		echo "Refusing to package an IPA with unsigned Gecko binaries."
+		exit 1
+	fi
 fi
 
 if [ "$BUILD_TYPE" = "--jailbroken" ]; then
@@ -111,6 +125,17 @@ if [ "$BUILD_TYPE" = "--jailbroken" ]; then
 
 		if [ ! -s "$SIGNED_DYLIB" ]; then
 			echo "Extracted $SWIFT_CONCURRENCY_DYLIB is empty."
+			exit 1
+		fi
+
+		# 供应链校验：0.10.0 的 dylib 是固定产物，hash 不符就说明
+		# release 资产被替换或下载被截断，宁可失败也不出坏包。
+		SWIFT_CONCURRENCY_SHA256="cab2c1c922f659d8d96fb2b4b0717e646dca432895443998beadda9a3532386e"
+		ACTUAL_SHA256="$(shasum -a 256 "$SIGNED_DYLIB" | awk '{print $1}')"
+		if [ "$ACTUAL_SHA256" != "$SWIFT_CONCURRENCY_SHA256" ]; then
+			echo "Checksum mismatch for $SWIFT_CONCURRENCY_DYLIB"
+			echo "  expected $SWIFT_CONCURRENCY_SHA256"
+			echo "  actual   $ACTUAL_SHA256"
 			exit 1
 		fi
 

@@ -52,8 +52,17 @@ if [[ -n "$(git -C "$SUBMODULE_PATH" status --porcelain)" ]]; then
 	exit 1
 fi
 
-setopt null_glob
-patch_files=("$PATCH_DIR"/**/*.patch)
+setopt globstar null_glob
+if [[ -f "$PATCH_DIR/series" ]]; then
+	# patches/series 显式给出顺序，避免目录名排序造成的依赖错位
+	patch_files=()
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		[[ -z "$line" || "$line" == \#* ]] && continue
+		patch_files+=("$PATCH_DIR/$line")
+	done < "$PATCH_DIR/series"
+else
+	patch_files=("$PATCH_DIR"/**/*.patch)
+fi
 
 if (( ${#patch_files[@]} == 0 )); then
 	echo "No patch files found in $PATCH_DIR."
@@ -67,6 +76,12 @@ for patch_file in $patch_files; do
 
 	if ! git -C "$SUBMODULE_PATH" apply --3way --whitespace=nowarn "$patch_file"; then
 		echo "Failed to apply $rel_path."
+		echo "Conflicted files:"
+		git -C "$SUBMODULE_PATH" diff --name-only --diff-filter=U || true
+		if [[ -n "${CI:-}" || "${GITHUB_ACTIONS:-}" == "true" || ! -t 0 ]]; then
+			echo "Non-interactive environment: aborting instead of waiting for input."
+			exit 1
+		fi
 		echo "Resolve conflicts in $SUBMODULE_PATH, then press Enter to continue or type q to stop."
 		read -r response
 		if [[ "$response" == "q" || "$response" == "Q" ]]; then

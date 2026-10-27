@@ -10,6 +10,7 @@ TARGET="aarch64-apple-ios"
 USE_SCCACHE=false
 AUTO_CLOBBER=false
 DISABLE_JEMALLOC=false
+DISABLE_WASM_SANDBOXED=false
 
 for arg in "$@"; do
 	case "$arg" in
@@ -21,6 +22,11 @@ for arg in "$@"; do
 			;;
 		--disable-jemalloc)
 			DISABLE_JEMALLOC=true
+			;;
+		# CI 诊断构建不需要 Gecko 可选的 WASM 沙箱库，跳过它
+		# 可以省掉一整套 WASI SDK 依赖。
+		--without-wasm-sandboxed-libraries)
+			DISABLE_WASM_SANDBOXED=true
 			;;
 	esac
 done
@@ -59,6 +65,9 @@ fi
 	fi
 	if [ "$DISABLE_JEMALLOC" = true ]; then
 		echo "ac_add_options --disable-jemalloc"
+	fi
+	if [ "$DISABLE_WASM_SANDBOXED" = true ]; then
+		echo "ac_add_options --without-wasm-sandboxed-libraries"
 	fi
 	if [ "$AUTO_CLOBBER" = true ]; then
 		echo "mk_add_options AUTOCLOBBER=1"

@@ -53,40 +53,6 @@ jobs:
       - name: Apply Gecko patches
         run: ./tools/development/apply-patches.sh
 
-      - name: Patch Gecko ld64 detection for Xcode 26
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("engine/firefox/build/moz.configure/toolchain.configure")
-          text = path.read_text()
-          old = 'if retcode == 1 and "Logging ld64 options" in stderr:'
-          new = 'if retcode == 1 and (target.kernel == "Darwin" or "Logging ld64 options" in stderr):'
-          if old not in text:
-              raise SystemExit("Expected Gecko ld64 detection code was not found")
-          text = text.replace(old, new, 1)
-
-          # Xcode 26 Apple clang rejects Gecko's automatic Darwin lld choice
-          # for host helper tools; force the normal ld64 fallback instead.
-          import re
-          old_lld_choice = re.compile(
-              r'(?m)^\s*or \(\n'
-              r'\s*target\.kernel == "Darwin"\n'
-              r'\s*and \(\n'
-              r'\s*\(developer_options and c_compiler\.version >= "13\.0"\)\n'
-              r'\s*or c_compiler\.version >= "15\.0"\n'
-              r'\s*\)\n'
-              r'\s*\)'
-          )
-          text, replaced = old_lld_choice.subn("                or False", text, count=1)
-          if replaced != 1:
-              raise SystemExit(f"Expected Gecko Darwin lld selection block once, got {replaced}")
-          if 'result = try_linker("lld")' not in text:
-              raise SystemExit("Gecko linker selection marker disappeared unexpectedly")
-          path.write_text(text)
-          print("Applied Xcode 26 ld64 detection compatibility patch")
-          PY
-
       - name: Cache Gecko build
         id: gecko-cache
         continue-on-error: true
@@ -111,27 +77,14 @@ jobs:
 
       - name: Build Gecko
         run: |
-          # The diagnostic build does not need Gecko's optional sandboxed WASM
-          # libraries; skipping them avoids a separate WASI SDK dependency.
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("tools/development/build-gecko.sh")
-          text = path.read_text()
-          marker = 'echo "ac_add_options --enable-application=mobile/ios"\n'
-          addition = marker + '\techo "ac_add_options --without-wasm-sandboxed-libraries"\n'
-          if addition not in text:
-              if marker not in text:
-                  raise SystemExit("Gecko build configuration marker not found")
-              text = text.replace(marker, addition, 1)
-              path.write_text(text)
-          print("Disabled optional sandboxed WASM libraries for CI diagnostic build")
-          PY
           # 缓存的 obj 目录可能带 merge-day CLOBBER 标记，mach 会要求全量
           # clobber 重建并直接退出；删掉标记以启用增量构建。
           rm -f engine/firefox/obj-aarch64-apple-ios/CLOBBER
           # jemalloc 在 libhooker 注入下会让应用启动即崩溃（上游 #312）；
           # 该 CI 产出的三包共用同一份 Gecko，故统一关闭。
-          ./tools/development/build-gecko.sh --disable-jemalloc
+          # 诊断构建跳过 Gecko 可选的 WASM 沙箱库，省掉 WASI SDK 依赖；
+          # 通过 build-gecko.sh 的参数实现，不再改动上游源码。
+          ./tools/development/build-gecko.sh --disable-jemalloc --without-wasm-sandboxed-libraries
 
       - name: Archive Reynard without Apple provisioning
         env:
@@ -199,16 +152,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          TAG="reynard-diagnostic"
           SHA8="${GITHUB_SHA::8}"
-          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Reynard Diagnostic Build ($SHA8)" \
-            --notes "自动构建 commit $SHA8。Reynard-TrollStore.tipa = TrollStore 安装；Reynard-Jailbroken.ipa = 越狱安装；Reynard.ipa = 通用。" \
-            dist/Reynard.ipa \
-            dist/Reynard-TrollStore.tipa \
-            dist/Reynard-Jailbroken.ipa
+          TAG="reynard-diagnostic-${SHA8}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; replacing its assets."
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+              dist/Reynard.ipa \
+              dist/Reynard-TrollStore.tipa \
+              dist/Reynard-Jailbroken.ipa
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Reynard Diagnostic Build ($SHA8)" \
+              --notes "自动构建 commit $SHA8。Reynard-TrollStore.tipa = TrollStore 安装；Reynard-Jailbroken.ipa = 越狱安装；Reynard.ipa = 通用。" \
+              dist/Reynard.ipa \
+              dist/Reynard-TrollStore.tipa \
+              dist/Reynard-Jailbroken.ipa
+          fi
 
       - name: Upload build log after failure
         if: failure()
