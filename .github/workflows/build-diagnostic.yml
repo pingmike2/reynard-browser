@@ -52,8 +52,11 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install ldid
-        run: brew install ldid
+      - name: Install ldid and lld
+        run: brew install ldid lld
+
+      - name: Put lld on PATH
+        run: echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
 
       - name: Sync Gecko source
         run: ./tools/development/update-gecko.sh

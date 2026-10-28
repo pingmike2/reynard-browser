@@ -50,7 +50,9 @@ fi
 {
 	echo "ac_add_options --enable-application=mobile/ios"
 	echo "ac_add_options --target=$TARGET"
-	echo "ac_add_options --enable-linker=ld64"
+	# bootstrap 工具链是 LLVM22，Xcode 26 自带的 ld64 只认 LLVM21，
+	# 读不了它产出的 bitcode；lld 与编译器同版本，故改用它。
+	echo "ac_add_options --enable-linker=lld"
 	echo "ac_add_options --enable-ios-target=13.0"
 	echo "ac_add_options --enable-optimize"
 	echo "ac_add_options --enable-release"
