@@ -91,6 +91,9 @@ jobs:
           # mach 的 bootstrap 会在 taskgraph venv 里编译 orjson/rtoml 这类
           # Rust 扩展，它们按 PyO3 支持的最高版本建，runner 镜像的 3.15 太新。
           PYTHON: python3
+          # bootstrap 工具链是 LLVM22，Xcode 26 的 ld64 只认 LLVM21；
+          # 与上游 build.yml 一致，全部链接走同版本的 lld。
+          LD: ld64.lld
         run: |
           # 缓存的 obj 目录可能带 merge-day CLOBBER 标记，mach 会要求全量
           # clobber 重建并直接退出；删掉标记以启用增量构建。

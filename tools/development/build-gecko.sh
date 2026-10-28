@@ -50,9 +50,10 @@ fi
 {
 	echo "ac_add_options --enable-application=mobile/ios"
 	echo "ac_add_options --target=$TARGET"
-	# bootstrap 工具链是 LLVM22，Xcode 26 自带的 ld64 只认 LLVM21，
-	# 读不了它产出的 bitcode；lld 与编译器同版本，故改用它。
-	echo "ac_add_options --enable-linker=lld"
+	# d952c21 曾在此显式选 ld64，因为 Gecko 157 的 bootstrap 工具链是 LLVM21，
+	# 与 Xcode 26 的 ld64 同版本。Gecko 158 起 bootstrap 升到 LLVM22，ld64 读不了
+	# 它产出的 bitcode（"Unknown attribute kind (105)"），故交给 lld —— 与编译器同版本。
+	# 链接器二进制由工作流通过 LD 环境变量指定。
 	echo "ac_add_options --enable-ios-target=13.0"
 	echo "ac_add_options --enable-optimize"
 	echo "ac_add_options --enable-release"
