@@ -78,12 +78,6 @@ if ! rustup target list | grep -q "^$TARGET (installed)"; then
 	rustup target add "$TARGET"
 fi
 
-# runner 镜像的 Python 常比 PyO3 支持的上限更新，taskgraph 的 rtoml
-# 等 Rust 扩展会在 mach bootstrap 阶段编译失败。这里让 PyO3 走 stable
-# ABI 前向兼容，避免把 CI 绑死在某个 Python 小版本上。
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY="${PYO3_USE_ABI3_FORWARD_COMPATIBILITY:-1}"
-export PYO3_USE_ABI3_FORWARD_COMPATIBILITY
-
 cd "$FIREFOX_DIR"
 ./mach build
 
