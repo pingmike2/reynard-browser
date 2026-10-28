@@ -60,9 +60,9 @@ if [[ -f "$PATCH_DIR/series" ]]; then
 		patch_files+=("$PATCH_DIR/$line")
 	done < "$PATCH_DIR/series"
 else
-	# 仅在按目录递归收集时需要 globstar；series 模式按文件路径逐个取，不依赖它
-	setopt globstar null_glob
-	patch_files=("$PATCH_DIR"/**/*.patch)
+	# 用 find 递归收集，不依赖 zsh 的 globstar（5.9 才有；macOS 自带 5.8 会直接
+	# 报 "no such option: globstar" 并让脚本失败）。按路径排序保持可复现顺序。
+	patch_files=(${(f)"$(find "$PATCH_DIR" -type f -name '*.patch' | LC_ALL=C sort)"})
 fi
 
 if (( ${#patch_files[@]} == 0 )); then
