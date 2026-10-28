@@ -8,7 +8,9 @@ on:
     paths:
       - 'browser/**'
       - 'patches/**'
-      - 'tools/release/**'
+      - 'tools/**'
+      - '.github/workflows/build-diagnostic.yml'
+      - 'engine/release.txt'
   workflow_dispatch:
     inputs:
       configuration:
