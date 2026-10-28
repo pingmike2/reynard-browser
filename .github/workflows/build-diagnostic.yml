@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build-diagnostic:
@@ -86,14 +87,20 @@ jobs:
       - name: Prepare Gecko build config
         run: touch engine/firefox/.mozconfig
 
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
       - name: Build Gecko
         env:
           # mach 的 bootstrap 会在 taskgraph venv 里编译 orjson/rtoml 这类
           # Rust 扩展，它们按 PyO3 支持的最高版本建，runner 镜像的 3.15 太新。
           PYTHON: python3
-          # bootstrap 工具链是 LLVM22，Xcode 26 的 ld64 只认 LLVM21；
-          # 与上游 build.yml 一致，全部链接走同版本的 lld。
+          # 与上游 build.yml 一致：bootstrap 工具链是 LLVM22，链接同样走 lld。
           LD: ld64.lld
+          # sccache 把 C/C++/Rust 对象持续写进 GHA 缓存，失败也照写；
+          # 全量构建接近 6 小时上限，靠它把后续运行压到增量。
+          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_GHA_VERSION: gecko-ios
         run: |
           # 缓存的 obj 目录可能带 merge-day CLOBBER 标记，mach 会要求全量
           # clobber 重建并直接退出；删掉标记以启用增量构建。
@@ -102,7 +109,7 @@ jobs:
           # 该 CI 产出的三包共用同一份 Gecko，故统一关闭。
           # 诊断构建跳过 Gecko 可选的 WASM 沙箱库，省掉 WASI SDK 依赖；
           # 通过 build-gecko.sh 的参数实现，不再改动上游源码。
-          ./tools/development/build-gecko.sh --disable-jemalloc --without-wasm-sandboxed-libraries
+          ./tools/development/build-gecko.sh --use-sccache --disable-jemalloc --without-wasm-sandboxed-libraries
 
       - name: Archive Reynard without Apple provisioning
         env:

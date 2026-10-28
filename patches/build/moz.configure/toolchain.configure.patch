@@ -20,27 +20,3 @@ index fad201046744..d962bc8437db 100644
  
  # GC rooting and hazard analysis.
  # ==============================================================
-@@ -1944,7 +1944,7 @@ def select_linker_tmpl(host_or_target):
-             # ensure consistent output.
-             env["LC_ALL"] = "C"
-             retcode, stdout, stderr = get_cmd_output(*cmd, env=env)
--            if retcode == 1 and "Logging ld64 options" in stderr:
-+            if retcode == 1 and (target.kernel == "Darwin" or "Logging ld64 options" in stderr):
-                 kind = "ld64"
- 
-             elif retcode != 0:
-@@ -1986,13 +1986,7 @@ def select_linker_tmpl(host_or_target):
-                     target.kernel != "Darwin"
-                     and (developer_options or c_compiler.version >= "15.0")
-                 )
--                or (
--                    target.kernel == "Darwin"
--                    and (
--                        (developer_options and c_compiler.version >= "13.0")
--                        or c_compiler.version >= "15.0"
--                    )
--                )
-+                or False
-             )
-         ):
-             result = try_linker("lld")
