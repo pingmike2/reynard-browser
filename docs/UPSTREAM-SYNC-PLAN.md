@@ -43,7 +43,7 @@
 
 | # | 现象 | 根因 | 处理 |
 | --- | --- | --- | --- |
-| 1 | `Apply Gecko patches` 失败：`NativeLayerCA.mm:275 patch does not apply` | fork 独有的 `patches/gfx/layers/NativeLayerRootCA-ios-mainthread.patch`（`51c8f5f`）与上游 `fbf7d79` 改了同一段代码，上游 158 已修主线程提交问题 | 删除该 patch（`8e7acc0`）；**不 revert `51c8f5f`**，仅删文件 |
+| 1 | `Apply Gecko patches` 失败：`NativeLayerCA.mm:275 patch does not apply` | fork 独有的 `patches/gfx/layers/NativeLayerRootCA-ios-mainthread.patch`（`51c8f5f`）与 `NativeLayerCA.mm.patch` 改同一函数，同文件互斥 | 删除独立 patch（`8e7acc0`）；**主线程跳转逻辑并入 `NativeLayerCA.mm.patch`**（见下） |
 | 2 | `dom/media/fake-cdm` 链接失败：`could not parse bitcode object file ... 'Unknown attribute kind (105)' (Producer: 'LLVM22.1.8' Reader: 'LLVM APPLE_1_2100...')` | Gecko 158 的 `--enable-bootstrap` 工具链升到 LLVM22，Xcode 26 自带 ld64 只认 LLVM21 | 回退 `faa1c19` 在 `toolchain.configure.patch` 里强制的 `kind=ld64` 两段（`a6c8695`），恢复上游「Darwin 优先试 lld」；`LD=ld64.lld` |
 | 3 | 构建 6 小时超时（`timeout-minutes: 360`，Hosted runner 硬上限） | 冷启动全量编译 Gecko 158 需 5.4 小时，`actions/cache` 只在 job 成功时写回，失败即白烧 | 接 sccache（`--use-sccache` + `mozilla-actions/sccache-action`，`permissions: actions: write`） |
 
@@ -56,7 +56,30 @@
 - 环境：TrollStore + Dopamine（libhooker）
 - 结果：**日常使用无异常**。jemalloc 关闭后未出现启动崩溃；JIT 路径正常；底部工具栏 safe area 正常
 - 第五节风险表中 #1（DDI）、#2（helper 改名）、#3（libswift 签名）**均未触发**
-- 遗留观察项：CALayer 主线程提交依赖上游 `fbf7d79`，本次未做长时滚动压力测试；若后续出现渲染撕裂/崩溃，需重新生成该 patch
+
+#### 真机回归：密码框闪退（2026-10-29，崩溃日志 `Reynard-2026-10-29-193416`）
+
+`a6c8695` 包在点击密码输入框时 SIGABRT。崩溃线程 Compositor：
+
+```
+NativeLayerRootCA::CommitToScreen()
+  -> CA::Transaction::commit()
+  -> UICollectionView layoutSubviews        (键盘/自动填充候选栏)
+  -> _AssertAutoLayoutOnAllowedThreadsOnly  (ObjC 异常, 无 catch -> terminate)
+```
+
+`51c8f5f` 当初解决的问题原样复发。复盘：
+
+- `8e7acc0` 删独立 patch 时判断「上游 `fbf7d79` 已取代」**不成立**：
+  `NativeLayerCA.mm.patch` 里的 `mMainThreadCommitCallback` 跳转被
+  `mOnscreenCommitData` 门控——只有注册过 onscreen commit data 的窗口才受保护，
+  普通页面窗口在非主线程 commit 时照样落到 `CommitRepresentation`。
+- 修复：`NativeLayerCA.mm.patch` 中把该分支改为**无条件拦截**——非主线程一律
+  `return false` 并转主线程（有 `mMainThreadCommitCallback` 走原回调，否则
+  `NS_DispatchToMainThread` 兜底）。独立 patch 不再恢复（同文件互斥是当初
+  CI 失败的真正原因，与上游取代无关）。
+- 教训：判断 fork patch「已被上游取代」必须在**打完全部补丁的最终形态**上核对行为，
+  不能只看上游 commit message 或相近函数名。
 
 ---
 

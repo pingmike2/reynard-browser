@@ -18,7 +18,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
  void NativeLayerRootCA::SetBackingScale(float aBackingScale) {
    MutexAutoLock lock(mMutex);
  
-@@ -275,8 +284,25 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
+@@ -275,8 +284,37 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
  }
  
  bool NativeLayerRootCA::CommitToScreen() {
@@ -32,10 +32,22 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
 +#ifdef MOZ_WIDGET_UIKIT
 +  if (NS_IsMainThread()) {
 +    mMainThreadCommitScheduled = false;
-+  } else if (mOnscreenCommitData && mMainThreadCommitCallback) {
-+    if (!mMainThreadCommitScheduled) {
-+      mMainThreadCommitScheduled = true;
-+      mMainThreadCommitCallback();
++  } else {
++    // Committing off the main thread makes CoreAnimation lay out the host
++    // UIKit view on the Compositor thread. When that host view is a
++    // UIScrollView/UICollectionView (keyboard or password autofill UI),
++    // Auto Layout asserts _AssertAutoLayoutOnAllowedThreadsOnly and the
++    // process aborts. The mOnscreenCommitData-gated hop below only covers
++    // windows that registered onscreen commit data, so unconditionally
++    // defer every off-main-thread commit here instead.
++    if (mMainThreadCommitCallback) {
++      if (!mMainThreadCommitScheduled) {
++        mMainThreadCommitScheduled = true;
++        mMainThreadCommitCallback();
++      }
++    } else {
++      RefPtr<NativeLayerRootCA> self = this;
++      NS_DispatchToMainThread([self]() { self->CommitToScreen(); });
 +    }
 +    return false;
 +  }
