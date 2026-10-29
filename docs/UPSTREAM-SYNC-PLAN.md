@@ -37,6 +37,27 @@
 > 上游的 `build.yml` / `build-release.yml` 带 `github.repository_owner == 'minh-ton'` 门禁，
 > 在 fork 上不会执行；fork 的产物只能走 `build-diagnostic`。
 
+### 构建链路修复记录（2026-10-28，run `40778595586` 成功出包）
+
+合并后首次真正跑到打包，暴露出三个与上游同步无关、但会挡住出包的问题：
+
+| # | 现象 | 根因 | 处理 |
+| --- | --- | --- | --- |
+| 1 | `Apply Gecko patches` 失败：`NativeLayerCA.mm:275 patch does not apply` | fork 独有的 `patches/gfx/layers/NativeLayerRootCA-ios-mainthread.patch`（`51c8f5f`）与上游 `fbf7d79` 改了同一段代码，上游 158 已修主线程提交问题 | 删除该 patch（`8e7acc0`）；**不 revert `51c8f5f`**，仅删文件 |
+| 2 | `dom/media/fake-cdm` 链接失败：`could not parse bitcode object file ... 'Unknown attribute kind (105)' (Producer: 'LLVM22.1.8' Reader: 'LLVM APPLE_1_2100...')` | Gecko 158 的 `--enable-bootstrap` 工具链升到 LLVM22，Xcode 26 自带 ld64 只认 LLVM21 | 回退 `faa1c19` 在 `toolchain.configure.patch` 里强制的 `kind=ld64` 两段（`a6c8695`），恢复上游「Darwin 优先试 lld」；`LD=ld64.lld` |
+| 3 | 构建 6 小时超时（`timeout-minutes: 360`，Hosted runner 硬上限） | 冷启动全量编译 Gecko 158 需 5.4 小时，`actions/cache` 只在 job 成功时写回，失败即白烧 | 接 sccache（`--use-sccache` + `mozilla-actions/sccache-action`，`permissions: actions: write`） |
+
+**结论**：Gecko 158 的 bootstrap clang（LLVM22）与链接器必须同版本。任何让 configure 强制选 Apple `ld64` 的补丁都会重现 issue 2。
+`faa1c19` 的两段在 `--enable-linker=ld64` 尚存时是对的，`6a900c4` 移除该 pin 之后即成阻碍 —— 后续若再出类似报错，先查 `patches/build/moz.configure/toolchain.configure.patch` 是否又与上游分叉。
+
+### 真机验证结果（2026-10-29）
+
+- 包：`reynard-diagnostic-a6c86952`（release），主装 `Reynard-Jailbroken.ipa`（109.0 MB）
+- 环境：TrollStore + Dopamine（libhooker）
+- 结果：**日常使用无异常**。jemalloc 关闭后未出现启动崩溃；JIT 路径正常；底部工具栏 safe area 正常
+- 第五节风险表中 #1（DDI）、#2（helper 改名）、#3（libswift 签名）**均未触发**
+- 遗留观察项：CALayer 主线程提交依赖上游 `fbf7d79`，本次未做长时滚动压力测试；若后续出现渲染撕裂/崩溃，需重新生成该 patch
+
 ---
 
 ## 三、零影响原则（必须遵守）
@@ -135,17 +156,17 @@ unzip -l dist/Reynard-Jailbroken.ipa | grep GeckoView.framework | head
 
 ## 七、验收清单（越狱重点）
 
-- [ ] 冷启动 3 次无崩溃；二次启动正常
-- [ ] JIT 状态正确（设置内显示已启用，`about:memory` 可打开）
+- [x] 冷启动 3 次无崩溃；二次启动正常
+- [x] JIT 状态正确（设置内显示已启用，`about:memory` 可打开）
 - [ ] 重启设备后 DDI/JIT 仍可用（Cryptex 路径）
-- [ ] 上传文件正常（验证 `17c9039` 的 #332 修复未回归）
+- [x] 上传文件正常（验证 `17c9039` 的 #332 修复未回归）
 - [ ] 下载、分享、打印/PDF 正常
 - [ ] 音频播放、麦克风/相机权限正常
 - [ ] 标签页：切换、总览、静音、播放中标签
 - [ ] Reader Mode、自动开启设置
 - [ ] 数据导入导出可用；原有书签/历史/插件仍在
-- [ ] 与常用 tweak 共存（libhooker 注入、无启动崩溃）
-- [ ] 地址栏、键盘、页面滚动无异常
+- [x] 与常用 tweak 共存（libhooker 注入、无启动崩溃）
+- [x] 地址栏、键盘、页面滚动无异常
 
 ---
 
