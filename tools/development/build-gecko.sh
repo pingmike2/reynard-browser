@@ -11,6 +11,7 @@ USE_SCCACHE=false
 AUTO_CLOBBER=false
 DISABLE_JEMALLOC=false
 DISABLE_WASM_SANDBOXED=false
+DISABLE_LTO=false
 
 for arg in "$@"; do
 	case "$arg" in
@@ -27,6 +28,10 @@ for arg in "$@"; do
 		# 可以省掉一整套 WASI SDK 依赖。
 		--without-wasm-sandboxed-libraries)
 			DISABLE_WASM_SANDBOXED=true
+			;;
+		# LTO 在 iOS 全量构建里耗时最多，且 6 小时 job 上限下没有余量。
+		--disable-lto)
+			DISABLE_LTO=true
 			;;
 	esac
 done
@@ -58,7 +63,14 @@ fi
 	echo "ac_add_options --enable-optimize"
 	echo "ac_add_options --enable-release"
 	echo "ac_add_options --enable-rust-simd"
-	echo "ac_add_options --enable-lto"
+	if [ "$DISABLE_LTO" = true ]; then
+		# Gecko 全量编译在 macos-26 runner 上要 340 分钟上下，6 小时 job
+		# 上限下没有余量。LTO 是其中最贵的环节，链接期还要把全量 bitcode
+		# 重新优化一遍；关掉后 iOS 产物变大一些，但能稳定落在时限内。
+		echo "ac_add_options --disable-lto"
+	else
+		echo "ac_add_options --enable-lto"
+	fi
 	echo "ac_add_options --disable-debug"
 	echo "ac_add_options --disable-tests"
 	echo "ac_add_options --enable-bootstrap"
