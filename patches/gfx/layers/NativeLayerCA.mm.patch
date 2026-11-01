@@ -40,14 +40,14 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
 +    // process aborts. The mOnscreenCommitData-gated hop below only covers
 +    // windows that registered onscreen commit data, so unconditionally
 +    // defer every off-main-thread commit here instead.
-+    if (mMainThreadCommitCallback) {
-+      if (!mMainThreadCommitScheduled) {
-+        mMainThreadCommitScheduled = true;
-+        mMainThreadCommitCallback();
-+      }
-+    } else {
-+      RefPtr<NativeLayerRootCA> self = this;
-+      NS_DispatchToMainThread([self]() { self->CommitToScreen(); });
++    //
++    // Callers must install mMainThreadCommitCallback: cocoa/nsCocoaWindow
++    // can reach this path too, but this branch is UIKIT-only, so the only
++    // reachable caller is widget/uikit/nsWindow, which always sets it.
++    MOZ_ASSERT(mMainThreadCommitCallback);
++    if (!mMainThreadCommitScheduled) {
++      mMainThreadCommitScheduled = true;
++      mMainThreadCommitCallback();
 +    }
 +    return false;
 +  }
