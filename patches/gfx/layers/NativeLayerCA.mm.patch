@@ -18,7 +18,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
  void NativeLayerRootCA::SetBackingScale(float aBackingScale) {
    MutexAutoLock lock(mMutex);
  
-@@ -275,8 +284,37 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
+@@ -275,8 +284,47 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
  }
  
  bool NativeLayerRootCA::CommitToScreen() {
@@ -44,10 +44,20 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
 +    // Callers must install mMainThreadCommitCallback: cocoa/nsCocoaWindow
 +    // can reach this path too, but this branch is UIKIT-only, so the only
 +    // reachable caller is widget/uikit/nsWindow, which always sets it.
-+    MOZ_ASSERT(mMainThreadCommitCallback);
-+    if (!mMainThreadCommitScheduled) {
-+      mMainThreadCommitScheduled = true;
-+      mMainThreadCommitCallback();
++    // Check at runtime as well: MOZ_ASSERT compiles out under
++    // --enable-release, and invoking an empty std::function throws
++    // std::bad_function_call, which would terminate the process exactly
++    // like the assertion this change exists to avoid. nsWindow clears the
++    // callback in its teardown path, so this can be reached in practice.
++    // The flag is reset here rather than only on the main-thread path so a
++    // dropped commit cannot latch mMainThreadCommitScheduled true forever.
++    if (mMainThreadCommitCallback) {
++      if (!mMainThreadCommitScheduled) {
++        mMainThreadCommitScheduled = true;
++        mMainThreadCommitCallback();
++      }
++    } else {
++      mMainThreadCommitScheduled = false;
 +    }
 +    return false;
 +  }
