@@ -45,7 +45,7 @@
 | --- | --- | --- | --- |
 | 1 | `Apply Gecko patches` 失败：`NativeLayerCA.mm:275 patch does not apply` | fork 独有的 `patches/gfx/layers/NativeLayerRootCA-ios-mainthread.patch`（`51c8f5f`）与 `NativeLayerCA.mm.patch` 改同一函数，同文件互斥 | 删除独立 patch（`8e7acc0`）；**主线程跳转逻辑并入 `NativeLayerCA.mm.patch`**（见下） |
 | 2 | `dom/media/fake-cdm` 链接失败：`could not parse bitcode object file ... 'Unknown attribute kind (105)' (Producer: 'LLVM22.1.8' Reader: 'LLVM APPLE_1_2100...')` | Gecko 158 的 `--enable-bootstrap` 工具链升到 LLVM22，Xcode 26 自带 ld64 只认 LLVM21 | 回退 `faa1c19` 在 `toolchain.configure.patch` 里强制的 `kind=ld64` 两段（`a6c8695`），恢复上游「Darwin 优先试 lld」；`LD=ld64.lld` |
-| 3 | 构建 6 小时超时（`timeout-minutes: 360`，Hosted runner 硬上限） | 冷启动全量编译 Gecko 158 需 5.4 小时，`actions/cache` 只在 job 成功时写回，失败即白烧 | 接 sccache（`--use-sccache` + `mozilla-actions/sccache-action`，`permissions: actions: write`） |
+| 3 | 构建 6 小时超时（`timeout-minutes: 360`，Hosted runner 硬上限） | 冷启动全量编译 Gecko 158 需 5.4 小时，`actions/cache` 只在 job 成功时写回，失败即白烧 | 关闭 LTO 把全量压到 ~230 分钟（已做）；sccache 已实测无效并移除（GHA 后端只命中约 129 MB，纯 overhead） |
 
 **结论**：Gecko 158 的 bootstrap clang（LLVM22）与链接器必须同版本。任何让 configure 强制选 Apple `ld64` 的补丁都会重现 issue 2。
 `faa1c19` 的两段在 `--enable-linker=ld64` 尚存时是对的，`6a900c4` 移除该 pin 之后即成阻碍 —— 后续若再出类似报错，先查 `patches/build/moz.configure/toolchain.configure.patch` 是否又与上游分叉。

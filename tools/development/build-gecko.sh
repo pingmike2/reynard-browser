@@ -7,7 +7,6 @@ ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 FIREFOX_DIR="$ROOT_DIR/engine/firefox"
 
 TARGET="aarch64-apple-ios"
-USE_SCCACHE=false
 AUTO_CLOBBER=false
 DISABLE_JEMALLOC=false
 DISABLE_WASM_SANDBOXED=false
@@ -15,9 +14,6 @@ DISABLE_LTO=false
 
 for arg in "$@"; do
 	case "$arg" in
-		--use-sccache)
-			USE_SCCACHE=true
-			;;
 		--auto-clobber)
 			AUTO_CLOBBER=true
 			;;
@@ -29,16 +25,23 @@ for arg in "$@"; do
 		--without-wasm-sandboxed-libraries)
 			DISABLE_WASM_SANDBOXED=true
 			;;
+		# 诊断构建的固定参数组合。写在这里而不是 workflow 里，
+		# 是为了让缓存 key 只需 hash 本文件就能覆盖这些开关。
+		--ci-diagnostic)
+			DISABLE_LTO=true
+			DISABLE_JEMALLOC=true
+			DISABLE_WASM_SANDBOXED=true
+			;;
 		# LTO 在 iOS 全量构建里耗时最多，且 6 小时 job 上限下没有余量。
 		--disable-lto)
 			DISABLE_LTO=true
 			;;
+		*)
+			echo "unknown option: $arg" >&2
+			exit 2
+			;;
 	esac
 done
-
-if [ "$USE_SCCACHE" = true ]; then
-	SCCACHE_BIN="${SCCACHE_PATH:-$(command -v sccache)}"
-fi
 
 cd "$ROOT_DIR"
 
@@ -74,10 +77,6 @@ fi
 	echo "ac_add_options --disable-debug"
 	echo "ac_add_options --disable-tests"
 	echo "ac_add_options --enable-bootstrap"
-	if [ "$USE_SCCACHE" = true ]; then
-		echo "mk_add_options 'export RUSTC_WRAPPER=$SCCACHE_BIN'"
-		echo "ac_add_options --with-ccache=$SCCACHE_BIN"
-	fi
 	if [ "$DISABLE_JEMALLOC" = true ]; then
 		echo "ac_add_options --disable-jemalloc"
 	fi

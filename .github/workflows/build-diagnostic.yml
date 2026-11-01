@@ -22,6 +22,10 @@ on:
           - Debug
           - Release
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   actions: write
@@ -30,14 +34,18 @@ jobs:
   build-diagnostic:
     name: Build Reynard diagnostic IPA
     runs-on: macos-26
+    # 关 LTO 后 Gecko 全量约 230 分钟，加上 checkout/patch/xcodebuild/打包/上传，
+    # 240 没有余量会被中途杀掉；缓存只在成功时写回，被杀即永久冷启动。
     timeout-minutes: 360
 
     steps:
-      - name: Checkout repository with submodules
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
+          # 子模块由 update-gecko.sh 按 release.txt 浅拉，
+          # 递归 checkout 会多拉几个 G 的历史再被覆盖。
+          submodules: false
 
       - name: Show Apple toolchain
         run: |
@@ -53,8 +61,8 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install ldid and lld
-        run: brew install ldid lld
+      - name: Install ldid, lld and cbindgen
+        run: brew install ldid lld cbindgen
 
       - name: Put lld on PATH
         run: echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
@@ -75,14 +83,15 @@ jobs:
             ~/.mozbuild
             ~/.cargo/registry
             ~/.cargo/git
-          key: gecko-${{ runner.os }}-${{ hashFiles('engine/release.txt', 'patches/**') }}
+          # 构建参数（linker / LTO / jemalloc / WASM）由 build-gecko.sh 和本文件决定，
+          # 必须进 key，否则改参数后会命中不兼容的 obj 目录。
+          # 构建参数（LTO / jemalloc / WASM / linker）的开关都在 build-gecko.sh 里，
+          # 所以它进 key；workflow 文件本身不进 key（改注释/超时不该废掉数 GB 缓存）。
+          # 改了 build-gecko.sh 的默认值或调用参数时，手动把 v2 往上加一版。
+          key: gecko-v2-${{ runner.os }}-${{ hashFiles('engine/release.txt', 'patches/**', 'tools/development/build-gecko.sh') }}
 
       - name: Build idevice pairing library
         run: ./tools/development/build-idevice.sh
-
-      - name: Install Gecko build tools
-        run: |
-          cargo install cbindgen --locked
 
       - name: Prepare Gecko build config
         run: touch engine/firefox/.mozconfig
@@ -100,11 +109,11 @@ jobs:
           rm -f engine/firefox/obj-aarch64-apple-ios/CLOBBER
           # jemalloc 在 libhooker 注入下会让应用启动即崩溃（上游 #312）；
           # 该 CI 产出的三包共用同一份 Gecko，故统一关闭。
-          # 诊断构建跳过 Gecko 可选的 WASM 沙箱库，省掉 WASI SDK 依赖；
-          # 通过 build-gecko.sh 的参数实现，不再改动上游源码。
+          # 关闭 LTO / jemalloc / WASM 沙箱库的组合固定为 --ci-diagnostic；
+          # 参数定义在 build-gecko.sh 内，因此会被缓存 key 的 hashFiles 覆盖。
           # sccache 已移除：远程后端只写进百来个对象（约 129 MB），对全量
           # 构建是纯 miss 开销，反而比不接更慢。
-          ./tools/development/build-gecko.sh --disable-lto --disable-jemalloc --without-wasm-sandboxed-libraries
+          ./tools/development/build-gecko.sh --ci-diagnostic
 
       - name: Archive Reynard without Apple provisioning
         env:

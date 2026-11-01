@@ -57,8 +57,7 @@ jobs:
             ) {
               variants.push({
                 variant: 'standard',
-                build_args: '--use-sccache --auto-clobber',
-                sccache_namespace: 'standard',
+                build_args: '--auto-clobber',
               });
             }
 
@@ -67,8 +66,7 @@ jobs:
             ) {
               variants.push({
                 variant: 'nojemalloc',
-                build_args: '--disable-jemalloc --use-sccache --auto-clobber',
-                sccache_namespace: 'nojemalloc',
+                build_args: '--disable-jemalloc --auto-clobber',
               });
             }
 
@@ -83,10 +81,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: ${{ matrix.sccache_namespace }}
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -148,9 +142,6 @@ jobs:
           key: buildcache-idevice-${{ steps.rust_toolchain.outputs.hash }}-${{ hashFiles('support/idevice/Cargo.lock', 'support/idevice/Cargo.toml', 'tools/development/build-idevice.sh') }}
           restore-keys: |
             buildcache-idevice-${{ steps.rust_toolchain.outputs.hash }}-
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Build Gecko
         env:
