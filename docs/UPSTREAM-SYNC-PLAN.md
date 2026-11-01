@@ -75,11 +75,79 @@ NativeLayerRootCA::CommitToScreen()
   `mOnscreenCommitData` 门控——只有注册过 onscreen commit data 的窗口才受保护，
   普通页面窗口在非主线程 commit 时照样落到 `CommitRepresentation`。
 - 修复：`NativeLayerCA.mm.patch` 中把该分支改为**无条件拦截**——非主线程一律
-  `return false` 并转主线程（有 `mMainThreadCommitCallback` 走原回调，否则
-  `NS_DispatchToMainThread` 兜底）。独立 patch 不再恢复（同文件互斥是当初
+  `return false` 并转主线程。独立 patch 不再恢复（同文件互斥是当初
   CI 失败的真正原因，与上游取代无关）。
 - 教训：判断 fork patch「已被上游取代」必须在**打完全部补丁的最终形态**上核对行为，
   不能只看上游 commit message 或相近函数名。
+
+#### 修复过程中踩的两个坑（均已修正）
+
+1. `da5d533` 首次修复时写了 `NS_DispatchToMainThread([self](){ ... })` 兜底分支。
+   `NS_DispatchToMainThread` 只接受 `nsIRunnable*` / `already_AddRefed<nsIRunnable>`，
+   裸 lambda 无法隐式转换，**编译失败**（run `41175850227`，233 分钟时才炸）。
+   教训：改 Gecko C++ 前先确认 API 重载，别凭印象写。
+2. `85d05c3` 删掉兜底后只留 `MOZ_ASSERT(mMainThreadCommitCallback)`。
+   `--enable-release` 下断言被消除，空 `std::function` 求值会抛
+   `std::bad_function_call` 且无人捕获 → terminate，**与要修的崩溃同样致命**。
+   cline-re 审查抓到，`9cabf5d` 改为运行时 `if` 判断。
+
+最终形态（`9cabf5d`）：
+
+```cpp
+#ifdef MOZ_WIDGET_UIKIT
+  if (NS_IsMainThread()) {
+    mMainThreadCommitScheduled = false;
+  } else {
+    if (mMainThreadCommitCallback) {
+      if (!mMainThreadCommitScheduled) {
+        mMainThreadCommitScheduled = true;
+        mMainThreadCommitCallback();
+      }
+    } else {
+      mMainThreadCommitScheduled = false;   // 防止标志位永久 latch
+    }
+    return false;
+  }
+#endif
+```
+
+> 注意：**不要**在“已有排队 commit”时重置 `mMainThreadCommitScheduled`。
+> 排队的 commit 携带最新状态，每次请求都重投会把帧合并变成提交风暴。
+> cline-re 曾建议这样改，属于误判，已拒绝。
+
+#### 真机验证结果（2026-11-01）
+
+- 包：`reynard-diagnostic-9cabf5d7`（release），`Reynard-Jailbroken.ipa` 111.4 MB
+- **密码框场景通过**：点击账号/密码输入框、自动填充候选栏弹出，**不再闪退**
+- 现象观察：iOS 对 `isSecureTextEntry` 为 YES 的密码框默认禁用第三方键盘
+  （`GeckoEditableSupport.mm.patch` 里 `isSecureTextEntry` 直接返回
+  `IsPasswordEditor()`）。第三方输入法只在非密码框出现，属 Apple 的安全设计，
+  不是 Reynard 行为，也不是本 patch 的效果。
+- **遗留风险（未验证）**：非密码框（用户名框、普通文本框）触发键盘自动填充
+  候选栏或第三方输入法候选栏时，仍可能复现 `_AssertAutoLayoutOnAllowedThreadsOnly`。
+  代码层面已无条件拦截所有非主线程 commit，理论上已覆盖，但没有实测证据。
+
+#### 构建耗时结论修正
+
+关 LTO **并没有提速**，之前的判断是误读：
+
+| run | LTO | Build Gecko | 结果 |
+| --- | --- | --- | --- |
+| `a6c8695` | 开 | 315m | 成功 |
+| `9cabf5d` | 关 | 327m | 成功（总 335m / 上限 360m） |
+
+`4b0d0ee` 那次 233 分钟结束是**编译错误提前失败**，不是编译完成，不能作为耗时依据。
+LTO 的开销主要在链接期，编译期本身由 `--enable-optimize --enable-release` 决定。
+**当前 335 分钟只剩 25 分钟余量，任何一次 patch 变动导致的冷启动都有超时风险。**
+
+#### 待决事项
+
+- `989b2cc`（CI 基础设施改进：cache key 加入 `build-gecko.sh` hash、三个 workflow
+  加 `concurrency`、checkout 不拉递归子模块、cbindgen 改用 brew bottle、
+  `--ci-diagnostic` 参数组合、未知参数报错）**未推送**。经评估当前版本稳定，
+  决定不推送，保持现状。该提交仍留在本地分支，需要时可单独验证。
+- 该提交的 `#!/bin/sh` + `set -o pipefail` 在纯 POSIX sh 下不兼容（macOS 的
+  `/bin/sh` 是 bash 所以没炸）。若将来重新启用，需一并修正。
 
 ---
 
@@ -183,6 +251,8 @@ unzip -l dist/Reynard-Jailbroken.ipa | grep GeckoView.framework | head
 - [x] JIT 状态正确（设置内显示已启用，`about:memory` 可打开）
 - [ ] 重启设备后 DDI/JIT 仍可用（Cryptex 路径）
 - [x] 上传文件正常（验证 `17c9039` 的 #332 修复未回归）
+- [x] 密码框输入不闪退（`9cabf5d`，2026-11-01 真机验证）
+- [ ] 非密码框 + 自动填充/第三方输入法候选栏不闪退（遗留风险，见上文）
 - [ ] 下载、分享、打印/PDF 正常
 - [ ] 音频播放、麦克风/相机权限正常
 - [ ] 标签页：切换、总览、静音、播放中标签
