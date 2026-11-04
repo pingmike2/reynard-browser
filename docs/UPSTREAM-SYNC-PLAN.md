@@ -23,11 +23,11 @@
 | 项 | 值 |
 | --- | --- |
 | 仓库 | `/root/reynard-browser`（VPS） |
-| 当前分支 | `jit-upstream-batch1` |
+| 当前分支 | `main`（唯一长期分支） |
 | 合并提交 | `e9fd228` Merge upstream/main (0.19.0) |
 | 上游 | `upstream/main` = `24a99b7`（0.19.0，2026-10-25） |
-| 与上游关系 | 0 落后 / 35 领先（含 JIT 分支自有提交） |
-| `main` 分支 | 仍停在 `17c9039`（未动） |
+| 与上游关系 | 0 落后 / 358 领先（含 JIT 分支自有提交） |
+| `main` 分支 | 已同步 `jit-upstream-batch1`（快进合并，原分支废弃） |
 | 引擎版本 | `engine/release.txt` = `FIREFOX_158_0_1_RELEASE` |
 | 子模块指针 | `engine/firefox` c178247 → **9378fbc**；`support/idevice` 92323d1 → **d32c818** |
 | Gecko patches | 454 个 `.patch` |
@@ -210,7 +210,7 @@ LTO 的开销主要在链接期，编译期本身由 `--enable-optimize --enable
 
 ### P1 构建（不接触设备，零影响）
 
-1. 推送 `jit-upstream-batch1` 触发 `Build Diagnostic IPA`（路径命中 `browser/**`、`patches/**`）。
+1. 推送 `main` 触发 `Build Diagnostic IPA`（路径命中 `browser/**`、`patches/**`）。
 2. 等待产物：`Reynard.ipa`、`Reynard-TrollStore.tipa`、`Reynard-Jailbroken.ipa`、构建日志。
 3. 静态检查（在 VPS 或本机下载产物后执行）：
 
@@ -291,7 +291,6 @@ unzip -l dist/Reynard-Jailbroken.ipa | grep GeckoView.framework | head
 
 ## 十、待决策
 
-1. 是否现在推送 `jit-upstream-batch1` 触发 CI（会产生一次 1.5–3 小时的构建）。
+1. 是否现在推送 `main` 触发 CI（会产生一次 5.5 小时的构建）。
 2. 是否有备用越狱设备；没有则必须先在主用机做完整容器备份。
-3. 是否同步更新 `main`。
-4. 是否需要发 tag/Release（当前只有 diagnostic 自动发布）。
+3. 是否需要发 tag/Release（当前只有 diagnostic 自动发布）。
