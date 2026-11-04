@@ -18,39 +18,35 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
  void NativeLayerRootCA::SetBackingScale(float aBackingScale) {
    MutexAutoLock lock(mMutex);
  
-@@ -275,8 +284,47 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
- }
+@@ -275,8 +284,53 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
+   }
  
  bool NativeLayerRootCA::CommitToScreen() {
-+#if defined(MOZ_WIDGET_UIKIT)
-+  AutoCATransaction transaction;
-+  ReleasableMutexAutoLock layerUpdateLock(mLayerUpdateMutex);
-+#endif
-+
-   MutexAutoLock lock(mMutex);
- 
 +#ifdef MOZ_WIDGET_UIKIT
-+  if (NS_IsMainThread()) {
-+    mMainThreadCommitScheduled = false;
-+  } else {
++  // Take mLayerUpdateMutex first and mMutex second, matching
++  // NativeLayerRootRemoteMacParent::RecvCommitNativeLayerCommands, which
++  // holds mLayerUpdateMutex while SetOnscreenCommitData takes mMutex.
++  // Reversing that order here would let the two paths deadlock.
++  ReleasableMutexAutoLock layerUpdateLock(mLayerUpdateMutex);
++
++  if (!NS_IsMainThread()) {
 +    // Committing off the main thread makes CoreAnimation lay out the host
 +    // UIKit view on the Compositor thread. When that host view is a
 +    // UIScrollView/UICollectionView (keyboard or password autofill UI),
 +    // Auto Layout asserts _AssertAutoLayoutOnAllowedThreadsOnly and the
-+    // process aborts. The mOnscreenCommitData-gated hop below only covers
-+    // windows that registered onscreen commit data, so unconditionally
-+    // defer every off-main-thread commit here instead.
++    // process aborts, so never let an off-main-thread commit get that far.
 +    //
-+    // Callers must install mMainThreadCommitCallback: cocoa/nsCocoaWindow
-+    // can reach this path too, but this branch is UIKIT-only, so the only
-+    // reachable caller is widget/uikit/nsWindow, which always sets it.
-+    // Check at runtime as well: MOZ_ASSERT compiles out under
-+    // --enable-release, and invoking an empty std::function throws
-+    // std::bad_function_call, which would terminate the process exactly
-+    // like the assertion this change exists to avoid. nsWindow clears the
-+    // callback in its teardown path, so this can be reached in practice.
-+    // The flag is reset here rather than only on the main-thread path so a
-+    // dropped commit cannot latch mMainThreadCommitScheduled true forever.
++    // AutoCATransaction must not exist yet: it commits the surrounding
++    // transaction in its destructor, so returning after constructing it
++    // would still flush a transaction on this thread. That is exactly why
++    // the previous revision of this patch did not fix the crash.
++    //
++    // mMainThreadCommitCallback is installed by widget/uikit/nsWindow right
++    // after CreateForCALayer and cleared during teardown, so check it at
++    // runtime: MOZ_ASSERT compiles out under --enable-release and calling
++    // an empty std::function throws std::bad_function_call, which would
++    // terminate the process just like the assertion this avoids.
++    MutexAutoLock lock(mMutex);
 +    if (mMainThreadCommitCallback) {
 +      if (!mMainThreadCommitScheduled) {
 +        mMainThreadCommitScheduled = true;
@@ -61,11 +57,21 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
 +    }
 +    return false;
 +  }
++
++  AutoCATransaction transaction;
++#endif
++
++  MutexAutoLock lock(mMutex);
++
++#ifdef MOZ_WIDGET_UIKIT
++  mMainThreadCommitScheduled = false;
 +#endif
 +
    if (!NS_IsMainThread() && mOffMainThreadCommitsSuspended) {
      mCommitPending = true;
      return false;
+   }
+ 
 @@ -287,6 +313,10 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
                         mWindowIsFullscreen);
    mMutatedOnscreenLayerStructure = false;
