@@ -1,8 +1,6 @@
-diff --git a/gfx/layers/NativeLayerCA.mm b/gfx/layers/NativeLayerCA.mm
-index 0d8cd5a8f8e6..0ae6085c3aa9 100644
 --- a/gfx/layers/NativeLayerCA.mm
 +++ b/gfx/layers/NativeLayerCA.mm
-@@ -244,6 +244,15 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
+@@ -244,6 +244,15 @@
    }
  }
  
@@ -18,15 +16,15 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
  void NativeLayerRootCA::SetBackingScale(float aBackingScale) {
    MutexAutoLock lock(mMutex);
  
-@@ -275,8 +284,53 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
-   }
+@@ -275,8 +284,52 @@
+ }
  
  bool NativeLayerRootCA::CommitToScreen() {
 +#ifdef MOZ_WIDGET_UIKIT
-+  // Take mLayerUpdateMutex first and mMutex second, matching
++  // Take mLayerUpdateMutex before mMutex, matching
 +  // NativeLayerRootRemoteMacParent::RecvCommitNativeLayerCommands, which
 +  // holds mLayerUpdateMutex while SetOnscreenCommitData takes mMutex.
-+  // Reversing that order here would let the two paths deadlock.
++  // Reversing the order here would let the two paths deadlock.
 +  ReleasableMutexAutoLock layerUpdateLock(mLayerUpdateMutex);
 +
 +  if (!NS_IsMainThread()) {
@@ -34,12 +32,13 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
 +    // UIKit view on the Compositor thread. When that host view is a
 +    // UIScrollView/UICollectionView (keyboard or password autofill UI),
 +    // Auto Layout asserts _AssertAutoLayoutOnAllowedThreadsOnly and the
-+    // process aborts, so never let an off-main-thread commit get that far.
++    // process aborts, so never let an off-main-thread commit get this far.
 +    //
-+    // AutoCATransaction must not exist yet: it commits the surrounding
-+    // transaction in its destructor, so returning after constructing it
-+    // would still flush a transaction on this thread. That is exactly why
-+    // the previous revision of this patch did not fix the crash.
++    // AutoCATransaction must not be constructed before this point: its
++    // destructor commits the surrounding transaction, so returning after
++    // it exists would still flush a transaction on this thread. That is
++    // exactly why the previous revision of this patch did not stop the
++    // crash even though it returned here.
 +    //
 +    // mMainThreadCommitCallback is installed by widget/uikit/nsWindow right
 +    // after CreateForCALayer and cleared during teardown, so check it at
@@ -61,8 +60,8 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
 +  AutoCATransaction transaction;
 +#endif
 +
-+  MutexAutoLock lock(mMutex);
-+
+   MutexAutoLock lock(mMutex);
+ 
 +#ifdef MOZ_WIDGET_UIKIT
 +  mMainThreadCommitScheduled = false;
 +#endif
@@ -70,9 +69,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
    if (!NS_IsMainThread() && mOffMainThreadCommitsSuspended) {
      mCommitPending = true;
      return false;
-   }
- 
-@@ -287,6 +313,10 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
+@@ -287,6 +340,10 @@
                         mWindowIsFullscreen);
    mMutatedOnscreenLayerStructure = false;
  
@@ -83,7 +80,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
    mCommitPending = false;
  
    if (StaticPrefs::gfx_webrender_debug_dump_native_layer_tree_to_file()) {
-@@ -320,6 +350,19 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
+@@ -320,6 +377,19 @@
      EmitTelemetryForVideoLowPower(videoLowPower);
    }
  
@@ -103,7 +100,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
    return true;
  }
  
-@@ -360,6 +403,26 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
+@@ -360,6 +430,26 @@
    mMutatedOffscreenLayerStructure = false;
  }
  
@@ -130,7 +127,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
  void NativeLayerRootCA::SetMutatedLayerStructure() {
    mMutatedOnscreenLayerStructure = true;
    mMutatedOffscreenLayerStructure = true;
-@@ -428,6 +491,19 @@ static void EmitTelemetryForVideoLowPower(VideoLowPowerType aVideoLowPower) {
+@@ -428,6 +518,19 @@
    if (mustRebuild) {
      aRootCALayer.sublayers = sublayers;
    }
@@ -150,7 +147,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
  }
  
  SnapshotterCADelegate::~SnapshotterCADelegate() = default;
-@@ -1527,6 +1603,14 @@ CGColorRef CGColorCreateForDeviceColor(const gfx::DeviceColor& aColor) {
+@@ -1527,6 +1630,14 @@
    return updateSucceeded;
  }
  
@@ -165,7 +162,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
  CALayer* NativeLayerCA::UnderlyingCALayer(WhichRepresentation aRepresentation) {
    MutexAutoLock lock(mMutex);
    return GetRepresentation(aRepresentation).UnderlyingCALayer();
-@@ -1539,7 +1623,8 @@ CGColorRef CGColorCreateForDeviceColor(const gfx::DeviceColor& aColor) {
+@@ -1539,7 +1650,8 @@
    AVSampleBufferDisplayLayer* videoLayer =
        (AVSampleBufferDisplayLayer*)mContentCALayer;
  
@@ -175,7 +172,7 @@ index 0d8cd5a8f8e6..0ae6085c3aa9 100644
      if (videoLayer.requiresFlushToResumeDecoding) {
        [videoLayer flush];
      }
-@@ -1645,6 +1730,11 @@ CGColorRef CGColorCreateForDeviceColor(const gfx::DeviceColor& aColor) {
+@@ -1645,6 +1757,11 @@
    if (osValue != noErr) {
      MOZ_ASSERT(sampleBuffer == nullptr,
                 "Failed call shouldn't allocate memory.");
