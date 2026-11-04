@@ -33,7 +33,11 @@ permissions:
 jobs:
   build-diagnostic:
     name: Build Reynard diagnostic IPA
-    runs-on: macos-26
+    # macos-26（arm64）容量长期紧张，多次出现排 15 分钟仍拿不到机器、
+    # steps 全为 0 就被取消的情况。macos-26-intel 是标准托管机型（公开仓库
+    # 免费），4 核 / 14 GB，比 arm64 的 3 核 M1 / 7 GB 反而更强，原生 x86_64
+    # 编译不需要 Rosetta。缺点是单核性能弱于 M1，编译时间会变长。
+    runs-on: macos-26-intel
     # Gecko 全量构建实测 327-335 分钟，再加约 10 分钟的打包与上传，
     # 离上限只剩 25 分钟余量。托管 runner 的硬上限是 6 小时（360 分钟，
     # 见 Actions limits），写更大也不会放宽，超时即被杀并丢掉全部产物。
