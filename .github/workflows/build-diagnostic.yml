@@ -34,8 +34,10 @@ jobs:
   build-diagnostic:
     name: Build Reynard diagnostic IPA
     runs-on: macos-26
-    # 关 LTO 后 Gecko 全量约 230 分钟，加上 checkout/patch/xcodebuild/打包/上传，
-    # 240 没有余量会被中途杀掉；缓存只在成功时写回，被杀即永久冷启动。
+    # Gecko 全量构建实测 327-335 分钟，再加约 10 分钟的打包与上传，
+    # 离上限只剩 25 分钟余量。托管 runner 的硬上限是 6 小时（360 分钟，
+    # 见 Actions limits），写更大也不会放宽，超时即被杀并丢掉全部产物。
+    # 要真正留出余量只能缩短构建时间，不能靠调大这个值。
     timeout-minutes: 360
 
     steps:
